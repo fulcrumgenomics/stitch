@@ -1,0 +1,40 @@
+[package]
+name = "fqcv"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+
+[[bin]]
+name = "fqcv"
+path = "src/main.rs"
+
+[lib]
+name = "fqcv_lib"
+path = "src/lib/mod.rs"
+
+[dependencies]
+anyhow = "1.0.71"
+bio = "1.1.0"
+clap = { version = "4.2.7", features = ["derive"] }
+env_logger = "0.10.0"
+fgoxide = "0.3.0"
+flate2 = "1.0.26"
+flume = "0.10.14"
+gzp = "0.11.3"
+itertools = "0.10.5"
+lazy_static = "1.4.0"
+log = "0.4.17"
+noodles = { version = "0.37.0", features = ["core", "sam", "bam"] }
+num_cpus = "1.15.0"
+proglog = {version = "0.3.0", features = ["pretty_counts"] }
+seq_io = "0.3.1"
+serde = "1.0.162"
+serde_derive = "1.0.162"
+
+[build-dependencies]
+built = { version = "0.6.0", features = ["git2"] }
+
+[profile.release]
+debug = true
