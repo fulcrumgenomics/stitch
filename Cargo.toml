@@ -26,7 +26,7 @@ gzp = "0.11.3"
 itertools = "0.10.5"
 lazy_static = "1.4.0"
 log = "0.4.17"
-noodles = { version = "0.37.0", features = ["core", "sam", "bam"] }
+noodles = { version = "0.37.0", features = ["core", "bgzf", "sam", "bam"] }
 num_cpus = "1.15.0"
 proglog = {version = "0.3.0", features = ["pretty_counts"] }
 seq_io = "0.3.1"

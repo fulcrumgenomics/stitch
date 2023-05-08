@@ -73,6 +73,10 @@ pub struct Opts {
     /// The alignment mode
     #[clap(long, short = 'm', default_value = "local", display_order = 16)]
     pub mode: AlignmentMode,
+
+    /// The compression level of the output BAM
+    #[clap(long, short = 'c', default_value = "0", display_order = 17)]
+    pub compression: u8,
 }
 
 /// Parse args and set up logging / tracing

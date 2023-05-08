@@ -20,6 +20,8 @@ use fgoxide::io::Io;
 use flume::unbounded;
 use itertools::{self, Itertools};
 use noodles::bam::Writer as BamWriter;
+use noodles::bgzf;
+use noodles::bgzf::writer::CompressionLevel;
 use noodles::core::Position;
 use noodles::sam::alignment::Record as SamRecord;
 use noodles::sam::header::record::value::map::Program;
@@ -454,7 +456,10 @@ pub fn run(opts: &Opts) -> Result<()> {
 
     let command_line = env::args_os().map(|s| s.into_string().unwrap()).join(" ");
     let stdout = io::stdout().lock();
-    let mut writer = BamWriter::new(stdout);
+    let encoder = bgzf::writer::Builder::default()
+        .set_compression_level(CompressionLevel::try_from(opts.compression)?)
+        .build_with_writer(stdout);
+    let mut writer = BamWriter::from(encoder);
     let header = SamHeader::builder()
         .set_header(Map::default())
         .add_program(
