@@ -1,4 +1,4 @@
-use crate::alignment::PairwiseAlignment;
+use crate::alignment::pairwise::PairwiseAlignment;
 use crate::{is_fastq_path, is_gzip_path};
 use anyhow::{Context, Result};
 use flate2::bufread::MultiGzDecoder;

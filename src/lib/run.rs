@@ -1,12 +1,12 @@
-use crate::alignment::PairwiseAlignment;
-use crate::alignment::SubAlignment;
+use crate::alignment::pairwise::PairwiseAlignment;
+use crate::alignment::scoring::Scoring;
+use crate::alignment::single_strand::SingleStrandAligner as PairwiseAligner;
+use crate::alignment::sub_alignment::SubAlignment;
 use crate::io::FastqThreadReader;
 use crate::io::OutputMessage;
 use crate::io::OutputResult;
 use crate::io::BUFFER_SIZE;
 use crate::opts::Opts;
-use crate::pairwise::Aligner as PairwiseAligner;
-use crate::pairwise::Scoring;
 use crate::util::built_info::VERSION;
 use crate::util::reverse_complement;
 use anyhow::Context;

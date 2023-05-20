@@ -1,4 +1,4 @@
-use crate::alignment::AlignmentMode;
+use crate::alignment::constants::AlignmentMode;
 use crate::util::built_info;
 use clap::Parser;
 use env_logger::Env;

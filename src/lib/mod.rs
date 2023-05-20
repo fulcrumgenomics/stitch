@@ -14,7 +14,6 @@ use std::path::Path;
 pub mod alignment;
 mod io;
 pub mod opts;
-pub mod pairwise;
 pub mod run;
 pub mod util;
 
