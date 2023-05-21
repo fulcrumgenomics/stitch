@@ -5,6 +5,8 @@ use clap::ValueEnum;
 /// adding two negative infinities. Use ~ `0.4 * i32::MIN`
 pub const MIN_SCORE: i32 = -858_993_459;
 
+pub const DEFAULT_ALIGNER_CAPACITY: usize = 200;
+
 /// Alignment operations supported are match, substitution, insertion, deletion
 /// and clipping. Clipping is a special boundary condition where you are allowed
 /// to clip off the beginning/end of the sequence for a fixed clip penalty. The
