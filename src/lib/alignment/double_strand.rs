@@ -574,6 +574,100 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         }
     }
 
+    fn traceback(
+        &mut self,
+        x: TextSlice<'_>,
+        y: TextSlice<'_>,
+        m: usize,
+        n: usize,
+    ) -> PairwiseAlignment {
+        let mut i = m;
+        let mut j = n;
+        let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(x.len());
+        let mut xstart: usize = 0usize;
+        let mut ystart: usize = 0usize;
+        let mut xend = m;
+        let mut yend = n;
+
+        let mut on_forward: bool = self.forward.S[i][j] > self.reverse.S[i][j];
+        let aligner = if on_forward {
+            &self.forward
+        } else {
+            &self.reverse
+        };
+
+        let mut last_layer = aligner.traceback.get(i, j).get_s_bits();
+        loop {
+            let next_layer: u32;
+            match last_layer {
+                TB_START => break,
+                TB_INS => {
+                    operations.push(AlignmentOperation::Ins);
+                    next_layer = aligner.traceback.get(i, j).get_i_bits();
+                    i -= 1;
+                }
+                TB_DEL => {
+                    operations.push(AlignmentOperation::Del);
+                    next_layer = aligner.traceback.get(i, j).get_d_bits();
+                    j -= 1;
+                }
+                TB_MATCH | TB_SUBST => {
+                    if last_layer == TB_MATCH {
+                        operations.push(AlignmentOperation::Match);
+                    } else {
+                        operations.push(AlignmentOperation::Subst);
+                    }
+                    let from_i = aligner.traceback.get(i, j).get_l_bits() as usize;
+                    if from_i != i - 1 {
+                        operations.push(AlignmentOperation::Xskip(i - 1));
+                    }
+                    next_layer = aligner.traceback.get(from_i, j - 1).get_s_bits();
+                    i = from_i;
+                    j -= 1;
+                }
+                TB_XCLIP_PREFIX => {
+                    operations.push(AlignmentOperation::Xclip(i));
+                    xstart = i;
+                    i = 0;
+                    next_layer = aligner.traceback.get(0, j).get_s_bits();
+                }
+                TB_XCLIP_SUFFIX => {
+                    operations.push(AlignmentOperation::Xclip(aligner.Lx[j]));
+                    i -= aligner.Lx[j];
+                    xend = i;
+                    next_layer = aligner.traceback.get(i, j).get_s_bits();
+                }
+                TB_YCLIP_PREFIX => {
+                    operations.push(AlignmentOperation::Yclip(j));
+                    ystart = j;
+                    j = 0;
+                    next_layer = aligner.traceback.get(i, 0).get_s_bits();
+                }
+                TB_YCLIP_SUFFIX => {
+                    operations.push(AlignmentOperation::Yclip(aligner.Ly[i]));
+                    j -= aligner.Ly[i];
+                    yend = j;
+                    next_layer = aligner.traceback.get(i, j).get_s_bits();
+                }
+                _ => panic!("Dint expect this!"),
+            }
+            last_layer = next_layer;
+        }
+
+        operations.reverse();
+        PairwiseAlignment {
+            score: aligner.S[n % 2][m],
+            ystart,
+            xstart,
+            yend,
+            xend,
+            ylen: n,
+            xlen: m,
+            operations,
+            mode: AlignmentMode::Custom,
+        }
+    }
+
     /// The core function to compute the alignment
     ///
     /// # Arguments
@@ -608,131 +702,76 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.reverse.fill_last_column_and_end_clipping(m, n);
 
         // Traceback...
-
-        let mut i = m;
-        let mut j = n;
-        let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(x.len());
-        let mut xstart: usize = 0usize;
-        let mut ystart: usize = 0usize;
-        let mut xend = m;
-        let mut yend = n;
-
-        let mut last_layer = self.traceback.get(i, j).get_s_bits();
-        loop {
-            let next_layer: u32;
-            match last_layer {
-                TB_START => break,
-                TB_INS => {
-                    operations.push(AlignmentOperation::Ins);
-                    next_layer = self.traceback.get(i, j).get_i_bits();
-                    i -= 1;
-                }
-                TB_DEL => {
-                    operations.push(AlignmentOperation::Del);
-                    next_layer = self.traceback.get(i, j).get_d_bits();
-                    j -= 1;
-                }
-                TB_MATCH | TB_SUBST => {
-                    if last_layer == TB_MATCH {
-                        operations.push(AlignmentOperation::Match);
-                    } else {
-                        operations.push(AlignmentOperation::Subst);
-                    }
-                    let from_i = self.traceback.get(i, j).get_l_bits() as usize;
-                    if from_i != i - 1 {
-                        operations.push(AlignmentOperation::Xskip(i - 1));
-                    }
-                    next_layer = self.traceback.get(from_i, j - 1).get_s_bits();
-                    i = from_i;
-                    j -= 1;
-                }
-                TB_XCLIP_PREFIX => {
-                    operations.push(AlignmentOperation::Xclip(i));
-                    xstart = i;
-                    i = 0;
-                    next_layer = self.traceback.get(0, j).get_s_bits();
-                }
-                TB_XCLIP_SUFFIX => {
-                    operations.push(AlignmentOperation::Xclip(self.Lx[j]));
-                    i -= self.Lx[j];
-                    xend = i;
-                    next_layer = self.traceback.get(i, j).get_s_bits();
-                }
-                TB_YCLIP_PREFIX => {
-                    operations.push(AlignmentOperation::Yclip(j));
-                    ystart = j;
-                    j = 0;
-                    next_layer = self.traceback.get(i, 0).get_s_bits();
-                }
-                TB_YCLIP_SUFFIX => {
-                    operations.push(AlignmentOperation::Yclip(self.Ly[i]));
-                    j -= self.Ly[i];
-                    yend = j;
-                    next_layer = self.traceback.get(i, j).get_s_bits();
-                }
-                _ => panic!("Dint expect this!"),
-            }
-            last_layer = next_layer;
-        }
-
-        operations.reverse();
-        PairwiseAlignment {
-            score: self.S[n % 2][m],
-            ystart,
-            xstart,
-            yend,
-            xend,
-            ylen: n,
-            xlen: m,
-            operations,
-            mode: AlignmentMode::Custom,
-        }
+        self.traceback(x, y, m, n)
     }
 
     /// Calculate global alignment of x against y.
     pub fn global(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
         // Store the current clip penalties
-        let clip_penalties = [
-            self.scoring.xclip_prefix,
-            self.scoring.xclip_suffix,
-            self.scoring.yclip_prefix,
-            self.scoring.yclip_suffix,
+        let forward_clip_penalties = [
+            self.forward.scoring.xclip_prefix,
+            self.forward.scoring.xclip_suffix,
+            self.forward.scoring.yclip_prefix,
+            self.forward.scoring.yclip_suffix,
+        ];
+        let reverse_clip_penalties = [
+            self.reverse.scoring.xclip_prefix,
+            self.reverse.scoring.xclip_suffix,
+            self.reverse.scoring.yclip_prefix,
+            self.reverse.scoring.yclip_suffix,
         ];
 
         // Temporarily Over-write the clip penalties
-        self.scoring.xclip_prefix = MIN_SCORE;
-        self.scoring.xclip_suffix = MIN_SCORE;
-        self.scoring.yclip_prefix = MIN_SCORE;
-        self.scoring.yclip_suffix = MIN_SCORE;
+        self.forward.scoring.xclip_prefix = MIN_SCORE;
+        self.forward.scoring.xclip_suffix = MIN_SCORE;
+        self.forward.scoring.yclip_prefix = MIN_SCORE;
+        self.forward.scoring.yclip_suffix = MIN_SCORE;
+        self.reverse.scoring.xclip_prefix = MIN_SCORE;
+        self.reverse.scoring.xclip_suffix = MIN_SCORE;
+        self.reverse.scoring.yclip_prefix = MIN_SCORE;
+        self.reverse.scoring.yclip_suffix = MIN_SCORE;
 
         // Compute the alignment
         let mut alignment = self.custom(x, y);
         alignment.mode = AlignmentMode::Global;
 
         // Set the clip penalties to the original values
-        self.scoring.xclip_prefix = clip_penalties[0];
-        self.scoring.xclip_suffix = clip_penalties[1];
-        self.scoring.yclip_prefix = clip_penalties[2];
-        self.scoring.yclip_suffix = clip_penalties[3];
-
+        self.forward.scoring.xclip_prefix = forward_clip_penalties[0];
+        self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
+        self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
+        self.forward.scoring.yclip_suffix = forward_clip_penalties[3];
+        self.reverse.scoring.xclip_prefix = reverse_clip_penalties[0];
+        self.reverse.scoring.xclip_suffix = reverse_clip_penalties[1];
+        self.reverse.scoring.yclip_prefix = reverse_clip_penalties[2];
+        self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
         alignment
     }
 
     /// Calculate semiglobal alignment of x against y (x is global, y is local).
     pub fn semiglobal(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
         // Store the current clip penalties
-        let clip_penalties = [
-            self.scoring.xclip_prefix,
-            self.scoring.xclip_suffix,
-            self.scoring.yclip_prefix,
-            self.scoring.yclip_suffix,
+        let forward_clip_penalties = [
+            self.forward.scoring.xclip_prefix,
+            self.forward.scoring.xclip_suffix,
+            self.forward.scoring.yclip_prefix,
+            self.forward.scoring.yclip_suffix,
+        ];
+        let reverse_clip_penalties = [
+            self.reverse.scoring.xclip_prefix,
+            self.reverse.scoring.xclip_suffix,
+            self.reverse.scoring.yclip_prefix,
+            self.reverse.scoring.yclip_suffix,
         ];
 
         // Temporarily Over-write the clip penalties
-        self.scoring.xclip_prefix = MIN_SCORE;
-        self.scoring.xclip_suffix = MIN_SCORE;
-        self.scoring.yclip_prefix = 0;
-        self.scoring.yclip_suffix = 0;
+        self.forward.scoring.xclip_prefix = MIN_SCORE;
+        self.forward.scoring.xclip_suffix = MIN_SCORE;
+        self.forward.scoring.yclip_prefix = 0;
+        self.forward.scoring.yclip_suffix = 0;
+        self.reverse.scoring.xclip_prefix = MIN_SCORE;
+        self.reverse.scoring.xclip_suffix = MIN_SCORE;
+        self.reverse.scoring.yclip_prefix = 0;
+        self.reverse.scoring.yclip_suffix = 0;
 
         // Compute the alignment
         let mut alignment = self.custom(x, y);
@@ -752,10 +791,15 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         }
 
         // Set the clip penalties to the original values
-        self.scoring.xclip_prefix = clip_penalties[0];
-        self.scoring.xclip_suffix = clip_penalties[1];
-        self.scoring.yclip_prefix = clip_penalties[2];
-        self.scoring.yclip_suffix = clip_penalties[3];
+
+        self.forward.scoring.xclip_prefix = forward_clip_penalties[0];
+        self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
+        self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
+        self.forward.scoring.yclip_suffix = forward_clip_penalties[3];
+        self.reverse.scoring.xclip_prefix = reverse_clip_penalties[0];
+        self.reverse.scoring.xclip_suffix = reverse_clip_penalties[1];
+        self.reverse.scoring.yclip_prefix = reverse_clip_penalties[2];
+        self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
 
         alignment
     }
@@ -763,18 +807,28 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     /// Calculate semiglobal alignment of x against y (x is local, y is global).
     pub fn semiglobal2(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
         // Store the current clip penalties
-        let clip_penalties = [
-            self.scoring.xclip_prefix,
-            self.scoring.xclip_suffix,
-            self.scoring.yclip_prefix,
-            self.scoring.yclip_suffix,
+        let forward_clip_penalties = [
+            self.forward.scoring.xclip_prefix,
+            self.forward.scoring.xclip_suffix,
+            self.forward.scoring.yclip_prefix,
+            self.forward.scoring.yclip_suffix,
+        ];
+        let reverse_clip_penalties = [
+            self.reverse.scoring.xclip_prefix,
+            self.reverse.scoring.xclip_suffix,
+            self.reverse.scoring.yclip_prefix,
+            self.reverse.scoring.yclip_suffix,
         ];
 
         // Temporarily Over-write the clip penalties
-        self.scoring.xclip_prefix = 0;
-        self.scoring.xclip_suffix = 0;
-        self.scoring.yclip_prefix = MIN_SCORE;
-        self.scoring.yclip_suffix = MIN_SCORE;
+        self.forward.scoring.xclip_prefix = 0;
+        self.forward.scoring.xclip_suffix = 0;
+        self.forward.scoring.yclip_prefix = MIN_SCORE;
+        self.forward.scoring.yclip_suffix = MIN_SCORE;
+        self.reverse.scoring.xclip_prefix = 0;
+        self.reverse.scoring.xclip_suffix = 0;
+        self.reverse.scoring.yclip_prefix = MIN_SCORE;
+        self.reverse.scoring.yclip_suffix = MIN_SCORE;
 
         // Compute the alignment
         let mut alignment = self.custom(x, y);
@@ -794,10 +848,15 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         }
 
         // Set the clip penalties to the original values
-        self.scoring.xclip_prefix = clip_penalties[0];
-        self.scoring.xclip_suffix = clip_penalties[1];
-        self.scoring.yclip_prefix = clip_penalties[2];
-        self.scoring.yclip_suffix = clip_penalties[3];
+
+        self.forward.scoring.xclip_prefix = forward_clip_penalties[0];
+        self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
+        self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
+        self.forward.scoring.yclip_suffix = forward_clip_penalties[3];
+        self.reverse.scoring.xclip_prefix = reverse_clip_penalties[0];
+        self.reverse.scoring.xclip_suffix = reverse_clip_penalties[1];
+        self.reverse.scoring.yclip_prefix = reverse_clip_penalties[2];
+        self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
 
         alignment
     }
@@ -805,18 +864,28 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     /// Calculate local alignment of x against y.
     pub fn local(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
         // Store the current clip penalties
-        let clip_penalties = [
-            self.scoring.xclip_prefix,
-            self.scoring.xclip_suffix,
-            self.scoring.yclip_prefix,
-            self.scoring.yclip_suffix,
+        let forward_clip_penalties = [
+            self.forward.scoring.xclip_prefix,
+            self.forward.scoring.xclip_suffix,
+            self.forward.scoring.yclip_prefix,
+            self.forward.scoring.yclip_suffix,
+        ];
+        let reverse_clip_penalties = [
+            self.reverse.scoring.xclip_prefix,
+            self.reverse.scoring.xclip_suffix,
+            self.reverse.scoring.yclip_prefix,
+            self.reverse.scoring.yclip_suffix,
         ];
 
         // Temporarily Over-write the clip penalties
-        self.scoring.xclip_prefix = 0;
-        self.scoring.xclip_suffix = 0;
-        self.scoring.yclip_prefix = 0;
-        self.scoring.yclip_suffix = 0;
+        self.forward.scoring.xclip_prefix = 0;
+        self.forward.scoring.xclip_suffix = 0;
+        self.forward.scoring.yclip_prefix = 0;
+        self.forward.scoring.yclip_suffix = 0;
+        self.reverse.scoring.xclip_prefix = 0;
+        self.reverse.scoring.xclip_suffix = 0;
+        self.reverse.scoring.yclip_prefix = 0;
+        self.reverse.scoring.yclip_suffix = 0;
 
         // Compute the alignment
         let mut alignment = self.custom(x, y);
@@ -836,10 +905,15 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         }
 
         // Set the clip penalties to the original values
-        self.scoring.xclip_prefix = clip_penalties[0];
-        self.scoring.xclip_suffix = clip_penalties[1];
-        self.scoring.yclip_prefix = clip_penalties[2];
-        self.scoring.yclip_suffix = clip_penalties[3];
+
+        self.forward.scoring.xclip_prefix = forward_clip_penalties[0];
+        self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
+        self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
+        self.forward.scoring.yclip_suffix = forward_clip_penalties[3];
+        self.reverse.scoring.xclip_prefix = reverse_clip_penalties[0];
+        self.reverse.scoring.xclip_suffix = reverse_clip_penalties[1];
+        self.reverse.scoring.yclip_prefix = reverse_clip_penalties[2];
+        self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
 
         alignment
     }
