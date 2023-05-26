@@ -12,3 +12,4 @@ pub mod scoring;
 pub mod single_strand;
 pub mod sub_alignment;
 pub mod traceback;
+pub mod x_buffer;

@@ -24,8 +24,8 @@ pub enum AlignmentOperation {
     Ins,          // Consumes a single query base
     Xclip(usize), // Consumes N query bases at the start or end of the query
     Yclip(usize), // Consumes N query bases at the start or end of the target
-    Xskip(usize), // Consumes N query bases (can be negative)
-    Xflip(usize), // Consumes N query bases (can be negative) and switches strand
+    Xskip(usize), // Consumes N query bases
+    Xflip(usize), // Consumes N query bases and switches strand
 }
 
 /// The modes of alignment supported by the aligner include standard modes such as

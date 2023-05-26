@@ -1,69 +1,67 @@
 use crate::alignment::constants::MIN_SCORE;
-use serde::Deserialize;
+use bio::alignment::pairwise::MatchFunc;
 use serde::Serialize;
 
-/// Trait required to instantiate a Scoring instance
-pub trait MatchFunc {
-    fn score(&self, a: u8, b: u8) -> i32;
-}
+// /// Trait required to instantiate a Scoring instance
+// pub trait MatchFunc {
+//     fn score(&self, a: u8, b: u8) -> i32;
+// }
 
-/// A concrete data structure which implements trait MatchFunc with constant
-/// match and mismatch scores
-#[derive(
-    Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize,
-)]
-pub struct MatchParams {
-    pub match_score: i32,
-    pub mismatch_score: i32,
-}
+// /// A concrete data structure which implements trait MatchFunc with constant
+// /// match and mismatch scores
+// #[derive(
+//     Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize,
+// )]
+// pub struct MatchParams {
+//     pub match_score: i32,
+//     pub mismatch_score: i32,
+// }
 
-impl MatchParams {
-    /// Create new MatchParams instance with given match and mismatch scores
-    ///
-    /// # Arguments
-    ///
-    /// * `match_score` - the score for a match (should not be negative)
-    /// * `mismatch_score` - the score for a mismatch (should not be positive)
-    pub fn new(match_score: i32, mismatch_score: i32) -> Self {
-        assert!(match_score >= 0, "match_score can't be negative");
-        assert!(mismatch_score <= 0, "mismatch_score can't be positive");
-        MatchParams {
-            match_score,
-            mismatch_score,
-        }
-    }
-}
+// impl MatchParams {
+//     /// Create new MatchParams instance with given match and mismatch scores
+//     ///
+//     /// # Arguments
+//     ///
+//     /// * `match_score` - the score for a match (should not be negative)
+//     /// * `mismatch_score` - the score for a mismatch (should not be positive)
+//     pub fn new(match_score: i32, mismatch_score: i32) -> Self {
+//         assert!(match_score >= 0, "match_score can't be negative");
+//         assert!(mismatch_score <= 0, "mismatch_score can't be positive");
+//         MatchParams {
+//             match_score,
+//             mismatch_score,
+//         }
+//     }
+// }
 
-impl MatchFunc for MatchParams {
-    #[inline]
-    fn score(&self, a: u8, b: u8) -> i32 {
-        if a == b {
-            self.match_score
-        } else {
-            self.mismatch_score
-        }
-    }
-}
+// impl MatchFunc for MatchParams {
+//     #[inline]
+//     fn score(&self, a: u8, b: u8) -> i32 {
+//         if a == b {
+//             self.match_score
+//         } else {
+//             self.mismatch_score
+//         }
+//     }
+// }
 
-/// The trait Matchfunc is also implemented for Fn(u8, u8) -> i32 so that Scoring
-/// can be instantiated using closures and custom user defined functions
-impl<F> MatchFunc for F
-where
-    F: Fn(u8, u8) -> i32,
-{
-    fn score(&self, a: u8, b: u8) -> i32 {
-        (self)(a, b)
-    }
-}
+// /// The trait Matchfunc is also implemented for Fn(u8, u8) -> i32 so that Scoring
+// /// can be instantiated using closures and custom user defined functions
+// impl<F> MatchFunc for F
+// where
+//     F: Fn(u8, u8) -> i32,
+// {
+//     fn score(&self, a: u8, b: u8) -> i32 {
+//         (self)(a, b)
+//     }
+// }
 
 /// Details of scoring are encapsulated in this structure.
 ///
 /// An [affine gap score model](https://en.wikipedia.org/wiki/Gap_penalty#Affine)
 /// is used so that the gap score for a length `k` is:
 /// `GapScore(k) = gap_open + gap_extend * k`
-#[derive(
-    Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize,
-)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
 pub struct Scoring<F: MatchFunc> {
     pub gap_open: i32,
     pub gap_extend: i32,
@@ -74,41 +72,6 @@ pub struct Scoring<F: MatchFunc> {
     pub xclip_suffix: i32,
     pub yclip_prefix: i32,
     pub yclip_suffix: i32,
-}
-
-impl Scoring<MatchParams> {
-    /// Create new Scoring instance with given gap open, gap extend penalties
-    /// match and mismatch scores. The clip penalties are set to `MIN_SCORE` by default
-    ///
-    /// # Arguments
-    ///
-    /// * `gap_open` - the score for opening a gap (should not be positive)
-    /// * `gap_extend` - the score for extending a gap (should not be positive)
-    /// * `jump_score` - the score for jumping back in the query (should not be positive)
-    /// * `match_score` - the score for a match
-    /// * `mismatch_score` - the score for a mismatch
-    pub fn from_scores(
-        gap_open: i32,
-        gap_extend: i32,
-        jump_score: i32,
-        match_score: i32,
-        mismatch_score: i32,
-    ) -> Self {
-        assert!(gap_open <= 0, "gap_open can't be positive");
-        assert!(gap_extend <= 0, "gap_extend can't be positive");
-
-        Scoring {
-            gap_open,
-            gap_extend,
-            jump_score,
-            match_fn: MatchParams::new(match_score, mismatch_score),
-            match_scores: Some((match_score, mismatch_score)),
-            xclip_prefix: MIN_SCORE,
-            xclip_suffix: MIN_SCORE,
-            yclip_prefix: MIN_SCORE,
-            yclip_suffix: MIN_SCORE,
-        }
-    }
 }
 
 impl<F: MatchFunc> Scoring<F> {
@@ -127,7 +90,7 @@ impl<F: MatchFunc> Scoring<F> {
         assert!(gap_extend <= 0, "gap_extend can't be positive");
         assert!(jump_score <= 0, "jump_score can't be positive");
 
-        Scoring {
+        Self {
             gap_open,
             gap_extend,
             jump_score,

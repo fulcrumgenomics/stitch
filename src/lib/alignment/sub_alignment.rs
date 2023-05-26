@@ -3,8 +3,7 @@ use itertools::Itertools;
 use crate::alignment::constants::AlignmentOperation;
 use crate::alignment::pairwise::PairwiseAlignment;
 use crate::alignment::scoring::Scoring;
-
-use super::scoring::MatchFunc;
+use bio::alignment::pairwise::MatchFunc;
 
 #[derive(Debug, Eq, PartialEq, Clone, Default)]
 pub struct SubAlignment {
@@ -12,6 +11,7 @@ pub struct SubAlignment {
     pub query_end: usize,
     pub target_start: usize,
     pub target_end: usize,
+    pub is_forward: bool,
     pub cigar: String,
     pub score: i32,
 }
@@ -28,9 +28,9 @@ fn cmp_op(last: AlignmentOperation, cur: AlignmentOperation, use_eq_and_x: bool)
 
 impl SubAlignment {
     // TODO: pass the query and target sequences to use a custom scoring function
-    pub fn build(
+    pub fn build<F: MatchFunc>(
         alignment: &PairwiseAlignment,
-        scoring: Scoring<impl Fn(u8, u8) -> i32>,
+        scoring: &Scoring<F>,
         use_eq_and_x: bool,
         swap: bool,
     ) -> Vec<SubAlignment> {
@@ -46,6 +46,7 @@ impl SubAlignment {
         let mut op_len: usize = 0;
         let mut alignments: Vec<SubAlignment> = Vec::new();
         let mut score: i32 = 0;
+        let mut is_forward = alignment.is_forward;
 
         let mut add_op = |op: AlignmentOperation, op_len| {
             match op {
@@ -71,12 +72,14 @@ impl SubAlignment {
                     query_offset += op_len;
                     cigar.push_str(&format!("{op_len}{ins_str}"));
                 }
+                // FIXME: Xflip
                 AlignmentOperation::Xskip(new_query_start) => {
                     let alignment = SubAlignment {
                         query_start,
                         query_end: query_offset,
                         target_start,
                         target_end: target_offset,
+                        is_forward,
                         cigar: cigar.clone(),
                         score,
                     };
@@ -88,6 +91,26 @@ impl SubAlignment {
                     query_start = new_query_start;
                     query_offset = new_query_start;
                     score = 0;
+                }
+                AlignmentOperation::Xflip(new_query_start) => {
+                    let alignment = SubAlignment {
+                        query_start,
+                        query_end: query_offset,
+                        target_start,
+                        target_end: target_offset,
+                        is_forward,
+                        cigar: cigar.clone(),
+                        score,
+                    };
+                    alignments.push(alignment);
+
+                    // reset
+                    cigar.clear();
+                    target_start = target_offset;
+                    query_start = new_query_start;
+                    query_offset = new_query_start;
+                    score = 0;
+                    is_forward = !is_forward;
                 }
                 AlignmentOperation::Xclip(_) => (), // Ignore
                 _ => panic!("Unknown operator: {op:?}"),
@@ -112,6 +135,7 @@ impl SubAlignment {
             query_end: query_offset,
             target_start,
             target_end: target_offset,
+            is_forward,
             cigar: cigar.clone(),
             score,
         };
@@ -125,6 +149,7 @@ impl SubAlignment {
                     query_end: a.target_end,
                     target_start: a.query_start,
                     target_end: a.query_end,
+                    is_forward: a.is_forward,
                     cigar: a.cigar.clone(),
                     score: a.score,
                 })

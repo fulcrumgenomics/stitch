@@ -1,20 +1,23 @@
+use crate::alignment::double_strand::DoubleStrandAligner;
 use crate::alignment::pairwise::PairwiseAlignment;
 use crate::alignment::scoring::Scoring;
-use crate::alignment::single_strand::SingleStrandAligner as PairwiseAligner;
+use crate::alignment::single_strand::SingleStrandAligner;
 use crate::alignment::sub_alignment::SubAlignment;
 use crate::io::FastqThreadReader;
 use crate::io::OutputMessage;
 use crate::io::OutputResult;
 use crate::io::BUFFER_SIZE;
 use crate::opts::Opts;
+use crate::target_seq::TargetHash;
+use crate::target_seq::TargetSeq;
 use crate::util::built_info::VERSION;
 use crate::util::reverse_complement;
 use anyhow::Context;
 use anyhow::{ensure, Result};
 use bio::alignment::pairwise::banded::Aligner as BandedAligner;
+use bio::alignment::pairwise::MatchFunc;
+use bio::alignment::pairwise::MatchParams;
 use bio::alignment::pairwise::Scoring as BioScoring;
-use bio::alignment::pairwise::MIN_SCORE;
-use bio::alignment::sparse::hash_kmers;
 use bio::alignment::sparse::HashMapFx as BandedHashMapFx;
 use fgoxide::io::Io;
 use flume::unbounded;
@@ -55,10 +58,10 @@ use std::str::FromStr;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-fn align_local_banded(
+fn align_local_banded<F: MatchFunc>(
     query: &[u8],
     target: &[u8],
-    aligner: &mut BandedAligner<impl Fn(u8, u8) -> i32>,
+    aligner: &mut BandedAligner<F>,
     target_kmer_hash: &BandedHashMapFx<&[u8], Vec<u32>>,
 ) -> i32 {
     // Compute the alignment
@@ -67,12 +70,43 @@ fn align_local_banded(
         .score
 }
 
-fn align(
+fn maybe_prealign<F: MatchFunc>(
+    query: &[u8],
+    target_seq: &TargetSeq,
+    target_hash: &TargetHash,
+    banded_aligner: &mut BandedAligner<F>,
+    pre_align: bool,
+) -> (Option<i32>, Option<i32>, Option<i32>) {
+    let (banded_fwd, banded_revcomp, prealign_score) = {
+        if pre_align {
+            let banded_fwd = align_local_banded(
+                query,
+                &target_seq.fwd,
+                banded_aligner,
+                &target_hash.fwd_hash,
+            );
+            let banded_revcomp = align_local_banded(
+                query,
+                &target_seq.revcomp,
+                banded_aligner,
+                &target_hash.revcomp_hash,
+            );
+            let prealign_score = std::cmp::max(banded_fwd, banded_revcomp);
+            (Some(banded_fwd), Some(banded_revcomp), Some(prealign_score))
+        } else {
+            (None, None, None)
+        }
+    };
+
+    (banded_fwd, banded_revcomp, prealign_score)
+}
+
+fn align_double_strand<F: MatchFunc>(
     record: FastqOwnedRecord,
-    target_seq: &[u8],
-    pairwise_aligner: &mut PairwiseAligner<impl Fn(u8, u8) -> i32>,
-    banded_aligner: &mut BandedAligner<impl Fn(u8, u8) -> i32>,
-    target_kmer_hash: &BandedHashMapFx<&[u8], Vec<u32>>,
+    target_seq: &TargetSeq,
+    target_hash: &TargetHash,
+    ds_aligner: &mut DoubleStrandAligner<F>,
+    banded_aligner: &mut BandedAligner<F>,
     pre_align: bool,
     pre_align_min_score: i32,
 ) -> (
@@ -81,62 +115,56 @@ fn align(
     Option<i32>,
 ) {
     let query = record.seq();
-    let query_revcomp = reverse_complement(query);
 
-    let banded_fwd = if pre_align {
-        let score = align_local_banded(query, target_seq, banded_aligner, target_kmer_hash);
-        Some(score)
-    } else {
-        None
+    let (banded_fwd, banded_revcomp, prealign_score) =
+        maybe_prealign(query, &target_seq, target_hash, banded_aligner, pre_align);
+
+    let alignment = {
+        if banded_fwd.map_or(true, |score| score >= pre_align_min_score)
+            || banded_revcomp.map_or(true, |score| score >= pre_align_min_score)
+        {
+            Some(ds_aligner.semiglobal(&target_seq.fwd, &target_seq.revcomp, query))
+        } else {
+            None
+        }
     };
 
-    let banded_revcomp = if pre_align {
-        let score =
-            align_local_banded(&query_revcomp, target_seq, banded_aligner, target_kmer_hash);
-        Some(score)
-    } else {
-        None
-    };
+    match alignment {
+        Some(result) => {
+            let is_forward = result.is_forward;
+            (record, Some((result, is_forward)), prealign_score)
+        }
+        None => (record, None, prealign_score),
+    }
+}
 
-    let fwd = if banded_fwd.map_or(true, |score| score >= pre_align_min_score) {
-        // Some(pairwise_aligner.local(target_seq, query))
-        Some(pairwise_aligner.semiglobal2(target_seq, query))
-    } else {
-        None
-    };
-    // let fwd: Option<PairwiseAlignment> = None;
+fn align_single_strand<F: MatchFunc>(
+    record: FastqOwnedRecord,
+    target_seq: &TargetSeq,
+    target_hash: &TargetHash,
+    ss_aligner: &mut SingleStrandAligner<F>,
+    banded_aligner: &mut BandedAligner<F>,
+    pre_align: bool,
+    pre_align_min_score: i32,
+) -> (
+    FastqOwnedRecord,
+    Option<(PairwiseAlignment, bool)>,
+    Option<i32>,
+) {
+    let query = record.seq();
+    let (banded_fwd, banded_revcomp, prealign_score) =
+        maybe_prealign(query, target_seq, target_hash, banded_aligner, pre_align);
+
+    let fwd: Option<PairwiseAlignment> =
+        if banded_fwd.map_or(true, |score| score >= pre_align_min_score) {
+            Some(ss_aligner.semiglobal(&target_seq.fwd, query))
+        } else {
+            None
+        };
     let revcomp = if banded_revcomp.map_or(true, |score| score >= pre_align_min_score) {
-        // Some(pairwise_aligner.local(target_seq, &query_revcomp))
-        Some(pairwise_aligner.semiglobal2(target_seq, &query_revcomp))
+        Some(ss_aligner.semiglobal(&target_seq.revcomp, query))
     } else {
         None
-    };
-    // let revcomp: Option<PairwiseAlignment> = None;
-
-    let prealign_score = match (banded_fwd, banded_revcomp) {
-        (None, None) => None,
-        (Some(f), None) => {
-            if f > MIN_SCORE {
-                Some(f)
-            } else {
-                None
-            }
-        }
-        (None, Some(r)) => {
-            if r > MIN_SCORE {
-                Some(r)
-            } else {
-                None
-            }
-        }
-        (Some(f), Some(r)) => {
-            let score = std::cmp::max(f, r);
-            if score > MIN_SCORE {
-                Some(score)
-            } else {
-                None
-            }
-        }
     };
 
     match (fwd, revcomp) {
@@ -192,21 +220,22 @@ fn read_target(file: &PathBuf) -> Result<(Vec<u8>, String)> {
     Ok((sequence, name))
 }
 
-fn to_records(
+fn to_records<F: MatchFunc>(
     fastq: &FastqOwnedRecord,
     result: Option<(PairwiseAlignment, bool)>,
     hard_clip: bool,
     use_eq_and_x: bool,
     alt_score: Option<i32>,
-    scoring: Scoring<impl Fn(u8, u8) -> i32>,
+    scoring: &Scoring<F>,
 ) -> Result<Vec<SamRecord>> {
     let name = header_to_name(fastq.head())?;
     let read_name: SamReadName = name.parse()?;
     let bases = fastq.seq();
     let quals = fastq.qual();
 
+    // FIXME: is_fwd vs is_forward below
     if let Some((alignment, is_fwd)) = result {
-        let subs = SubAlignment::build(&alignment, scoring, use_eq_and_x, true);
+        let subs = SubAlignment::build(&alignment, &scoring, use_eq_and_x, true);
         let bases = if is_fwd {
             bases.to_vec()
         } else {
@@ -379,27 +408,44 @@ pub fn run(opts: &Opts) -> Result<()> {
 
     let sleep_delay = Duration::from_millis(25);
 
-    let match_fn = {
-        let match_score: i32 = opts.match_score;
-        let mismatch_score: i32 = opts.mismatch_score;
-        move |a: u8, b: u8| {
-            if a == b {
-                match_score
-            } else {
-                mismatch_score
-            }
-        }
-    };
-    let scoring = Scoring::new(opts.gap_open, opts.gap_extend, opts.jump_score, match_fn);
+    let match_fn: MatchParams = MatchParams::new(opts.match_score, opts.mismatch_score);
+    let match_fn_revcomp: MatchParams = MatchParams::new(opts.match_score, opts.mismatch_score);
+
+    // // Set up the match function to use for scoring in the aligner
+    // let match_fn = {
+    //     let match_score: i32 = opts.match_score;
+    //     let mismatch_score: i32 = opts.mismatch_score;
+    //     move |a: u8, b: u8| {
+    //         if a == b {
+    //             match_score
+    //         } else {
+    //             mismatch_score
+    //         }
+    //     }
+    // };
     let scoring_bio = BioScoring::new(opts.gap_open, opts.gap_extend, match_fn);
 
     let thread_handles: Vec<JoinHandle<Result<()>>> = (0..opts.threads)
         .map(|_| {
             let to_align_rx = reader.to_align_rx.clone();
             let shutdown_rx = shutdown_rx.clone();
+            let target_name = target_name.clone();
             let target_seq = target_seq.clone();
-            let mut pairwise_aligner =
-                PairwiseAligner::with_capacity_and_scoring(10000, target_seq.len(), scoring);
+            let mut ss_aligner = SingleStrandAligner::with_capacity_and_scoring(
+                10000,
+                target_seq.len(),
+                Scoring::new(opts.gap_open, opts.gap_extend, opts.jump_score, match_fn),
+            );
+            let mut ds_aligner: DoubleStrandAligner<_> =
+                DoubleStrandAligner::with_capacity_and_scoring(
+                    10000,
+                    target_seq.len(),
+                    match_fn,
+                    match_fn_revcomp,
+                    opts.gap_open,
+                    opts.gap_extend,
+                    opts.jump_score,
+                );
             let opts = opts.clone();
             let mut banded_aligner = {
                 let mut aligner = BandedAligner::with_capacity_and_scoring(
@@ -420,7 +466,8 @@ pub fn run(opts: &Opts) -> Result<()> {
             };
 
             std::thread::spawn(move || {
-                let target_kmers_hash = hash_kmers(&target_seq, opts.k);
+                let target_seq = TargetSeq::new(&target_name, &target_seq);
+                let target_hash = target_seq.build_target_hash(opts.k);
                 loop {
                     // Try to process one chunk of alignments
                     if let Ok(msg) = to_align_rx.try_recv() {
@@ -428,15 +475,27 @@ pub fn run(opts: &Opts) -> Result<()> {
                             .records
                             .into_iter()
                             .map(|record| {
-                                align(
-                                    record,
-                                    &target_seq,
-                                    &mut pairwise_aligner,
-                                    &mut banded_aligner,
-                                    &target_kmers_hash,
-                                    opts.pre_align,
-                                    opts.pre_align_min_score,
-                                )
+                                if opts.double_strand {
+                                    align_double_strand(
+                                        record,
+                                        &target_seq,
+                                        &target_hash,
+                                        &mut ds_aligner,
+                                        &mut banded_aligner,
+                                        opts.pre_align,
+                                        opts.pre_align_min_score,
+                                    )
+                                } else {
+                                    align_single_strand(
+                                        record,
+                                        &target_seq,
+                                        &target_hash,
+                                        &mut ss_aligner,
+                                        &mut banded_aligner,
+                                        opts.pre_align,
+                                        opts.pre_align_min_score,
+                                    )
+                                }
                             })
                             .collect_vec();
                         msg.oneshot
@@ -478,6 +537,7 @@ pub fn run(opts: &Opts) -> Result<()> {
     writer.write_header(&header)?;
 
     loop {
+        let scoring = Scoring::new(opts.gap_open, opts.gap_extend, opts.jump_score, match_fn);
         // Get a receiver for the alignment of a record
         if let Ok(receiver) = reader.to_output_rx.try_recv() {
             let msg = receiver.recv()?;
@@ -489,7 +549,7 @@ pub fn run(opts: &Opts) -> Result<()> {
                     !opts.soft_clip,
                     opts.use_eq_and_x,
                     alt_score,
-                    scoring,
+                    &scoring,
                 )?;
                 for record in &records {
                     writer.write_record(&header, record)?;

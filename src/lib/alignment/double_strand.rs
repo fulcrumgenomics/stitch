@@ -5,24 +5,17 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::cmp::max;
-use std::i32;
-use std::iter::repeat;
-
-use crate::alignment::constants::AlignmentMode;
-use bio::utils::TextSlice;
-use serde::Deserialize;
-use serde::Serialize;
-
 use crate::alignment::constants::AlignmentOperation;
 use crate::alignment::constants::DEFAULT_ALIGNER_CAPACITY;
 use crate::alignment::pairwise::PairwiseAlignment;
-use crate::alignment::scoring::MatchFunc;
-use crate::alignment::scoring::Scoring;
-use crate::alignment::single_strand::SingleStrandMatrix;
-use crate::alignment::single_strand::XBuffer;
+use crate::alignment::single_strand::SingleStrandAligner;
+use bio::alignment::pairwise::MatchFunc;
+use bio::utils::TextSlice;
+use std::i32;
 
+use super::constants::AlignmentMode;
 use super::constants::MIN_SCORE;
+use super::scoring::Scoring;
 use super::traceback::TB_DEL;
 use super::traceback::TB_INS;
 use super::traceback::TB_MATCH;
@@ -77,10 +70,9 @@ use super::traceback::TB_YCLIP_SUFFIX;
 /// `traceback` - see [`bio::alignment::pairwise::TracebackCell`](struct.TracebackCell.html)
 ///
 /// `scoring` - see [`bio::alignment::pairwise::Scoring`](struct.Scoring.html)
-#[derive(Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 pub struct DoubleStrandAligner<F: MatchFunc> {
-    forward: SingleStrandMatrix<F>,
-    reverse: SingleStrandMatrix<F>,
+    forward: SingleStrandAligner<F>,
+    reverse: SingleStrandAligner<F>,
 }
 
 impl<F: MatchFunc> DoubleStrandAligner<F> {
@@ -94,7 +86,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     /// * `jump_score` - the score for jumping back in the query (should not be positive)
     /// * `match_fn` - function that returns the score for substitutions
     ///    (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
-    pub fn new(gap_open: i32, gap_extend: i32, jump_score: i32, match_fn: F) -> Self {
+    pub fn new(gap_open: i32, gap_extend: i32, jump_score: i32, match_fn: fn() -> F) -> Self {
         DoubleStrandAligner::with_capacity(
             DEFAULT_ALIGNER_CAPACITY,
             DEFAULT_ALIGNER_CAPACITY,
@@ -123,17 +115,27 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         gap_open: i32,
         gap_extend: i32,
         jump_score: i32,
-        match_fn: F,
+        match_fn: fn() -> F,
     ) -> Self {
         assert!(gap_open <= 0, "gap_open can't be positive");
         assert!(gap_extend <= 0, "gap_extend can't be positive");
 
         DoubleStrandAligner {
-            forward: SingleStrandMatrix::with_capacity(
-                m, n, gap_open, gap_extend, jump_score, match_fn,
+            forward: SingleStrandAligner::with_capacity(
+                m,
+                n,
+                gap_open,
+                gap_extend,
+                jump_score,
+                match_fn(),
             ),
-            reverse: SingleStrandMatrix::with_capacity(
-                m, n, gap_open, gap_extend, jump_score, match_fn,
+            reverse: SingleStrandAligner::with_capacity(
+                m,
+                n,
+                gap_open,
+                gap_extend,
+                jump_score,
+                match_fn(),
             ),
         }
     }
@@ -143,11 +145,21 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     /// # Arguments
     ///
     /// * `scoring` - the scoring struct (see bio::alignment::pairwise::Scoring)
-    pub fn with_scoring(scoring: Scoring<F>) -> Self {
+    pub fn with_scoring(
+        match_fn_fwd: F,
+        match_fn_revcomp: F,
+        gap_open: i32,
+        gap_extend: i32,
+        jump_score: i32,
+    ) -> Self {
         DoubleStrandAligner::with_capacity_and_scoring(
             DEFAULT_ALIGNER_CAPACITY,
             DEFAULT_ALIGNER_CAPACITY,
-            scoring,
+            match_fn_fwd,
+            match_fn_revcomp,
+            gap_open,
+            gap_extend,
+            jump_score,
         )
     }
 
@@ -159,67 +171,57 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     /// * `m` - the expected size of x
     /// * `n` - the expected size of y
     /// * `scoring` - the scoring struct
-    pub fn with_capacity_and_scoring(m: usize, n: usize, scoring: Scoring<F>) -> Self {
-        assert!(scoring.gap_open <= 0, "gap_open can't be positive");
-        assert!(scoring.gap_extend <= 0, "gap_extend can't be positive");
-        assert!(
-            scoring.xclip_prefix <= 0,
-            "Clipping penalty (x prefix) can't be positive"
-        );
-        assert!(
-            scoring.xclip_suffix <= 0,
-            "Clipping penalty (x suffix) can't be positive"
-        );
-        assert!(
-            scoring.yclip_prefix <= 0,
-            "Clipping penalty (y prefix) can't be positive"
-        );
-        assert!(
-            scoring.yclip_suffix <= 0,
-            "Clipping penalty (y suffix) can't be positive"
-        );
-
+    pub fn with_capacity_and_scoring(
+        m: usize,
+        n: usize,
+        match_fn_fwd: F,
+        match_fn_revcomp: F,
+        gap_open: i32,
+        gap_extend: i32,
+        jump_score: i32,
+    ) -> Self {
+        let scoring_fwd = Scoring::new(gap_open, gap_extend, jump_score, match_fn_fwd);
+        let scoring_rev = Scoring::new(gap_open, gap_extend, jump_score, match_fn_revcomp);
         DoubleStrandAligner {
-            forward: SingleStrandMatrix::with_capacity_and_scoring(m, n, scoring),
-            reverse: SingleStrandMatrix::with_capacity_and_scoring(m, n, scoring),
+            forward: SingleStrandAligner::with_capacity_and_scoring(m, n, scoring_fwd),
+            reverse: SingleStrandAligner::with_capacity_and_scoring(m, n, scoring_rev),
         }
     }
 
-    fn do_traceback(
-        &mut self,
-        x: TextSlice<'_>,
-        y: TextSlice<'_>,
-        m: usize,
-        n: usize,
-    ) -> PairwiseAlignment {
+    fn do_traceback(&mut self, m: usize, n: usize) -> PairwiseAlignment {
         let mut i = m;
         let mut j = n;
-        let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(x.len());
+        let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(m);
         let mut xstart: usize = 0usize;
         let mut ystart: usize = 0usize;
         let mut xend = m;
         let mut yend = n;
 
-        let mut on_forward: bool = self.forward.S[i][j] > self.reverse.S[i][j];
-        let aligner = if on_forward {
+        let mut cur_is_forward: bool = self.forward.S[i][j] > self.reverse.S[i][j];
+        let cur_aligner = if cur_is_forward {
             &self.forward
         } else {
             &self.reverse
         };
 
-        let mut last_layer = aligner.traceback.get(i, j).get_s_bits();
+        let mut last_layer = cur_aligner.traceback.get(i, j).get_s_bits();
         loop {
+            let cur_aligner = if cur_is_forward {
+                &self.forward
+            } else {
+                &self.reverse
+            };
             let next_layer: u32;
             match last_layer {
                 TB_START => break,
                 TB_INS => {
                     operations.push(AlignmentOperation::Ins);
-                    next_layer = aligner.traceback.get(i, j).get_i_bits();
+                    next_layer = cur_aligner.traceback.get(i, j).get_i_bits();
                     i -= 1;
                 }
                 TB_DEL => {
                     operations.push(AlignmentOperation::Del);
-                    next_layer = aligner.traceback.get(i, j).get_d_bits();
+                    next_layer = cur_aligner.traceback.get(i, j).get_d_bits();
                     j -= 1;
                 }
                 TB_MATCH | TB_SUBST => {
@@ -228,11 +230,16 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
                     } else {
                         operations.push(AlignmentOperation::Subst);
                     }
-                    let from_i = aligner.traceback.get(i, j).get_l_bits() as usize;
-                    if from_i != i - 1 {
-                        operations.push(AlignmentOperation::Xskip(i - 1));
+                    let from_flip_strand = cur_aligner.traceback.get(i, j).get_x_bits() == 1;
+
+                    let from_i = cur_aligner.traceback.get(i, j).get_l_bits() as usize;
+                    if from_flip_strand {
+                        operations.push(AlignmentOperation::Xflip(i - from_i));
+                        cur_is_forward = !cur_is_forward;
+                    } else if from_i != i - 1 {
+                        operations.push(AlignmentOperation::Xskip(i - from_i));
                     }
-                    next_layer = aligner.traceback.get(from_i, j - 1).get_s_bits();
+                    next_layer = cur_aligner.traceback.get(from_i, j - 1).get_s_bits();
                     i = from_i;
                     j -= 1;
                 }
@@ -240,25 +247,25 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
                     operations.push(AlignmentOperation::Xclip(i));
                     xstart = i;
                     i = 0;
-                    next_layer = aligner.traceback.get(0, j).get_s_bits();
+                    next_layer = cur_aligner.traceback.get(0, j).get_s_bits();
                 }
                 TB_XCLIP_SUFFIX => {
-                    operations.push(AlignmentOperation::Xclip(aligner.Lx[j]));
-                    i -= aligner.Lx[j];
+                    operations.push(AlignmentOperation::Xclip(cur_aligner.Lx[j]));
+                    i -= cur_aligner.Lx[j];
                     xend = i;
-                    next_layer = aligner.traceback.get(i, j).get_s_bits();
+                    next_layer = cur_aligner.traceback.get(i, j).get_s_bits();
                 }
                 TB_YCLIP_PREFIX => {
                     operations.push(AlignmentOperation::Yclip(j));
                     ystart = j;
                     j = 0;
-                    next_layer = aligner.traceback.get(i, 0).get_s_bits();
+                    next_layer = cur_aligner.traceback.get(i, 0).get_s_bits();
                 }
                 TB_YCLIP_SUFFIX => {
-                    operations.push(AlignmentOperation::Yclip(aligner.Ly[i]));
-                    j -= aligner.Ly[i];
+                    operations.push(AlignmentOperation::Yclip(cur_aligner.Ly[i]));
+                    j -= cur_aligner.Ly[i];
                     yend = j;
-                    next_layer = aligner.traceback.get(i, j).get_s_bits();
+                    next_layer = cur_aligner.traceback.get(i, j).get_s_bits();
                 }
                 _ => panic!("Dint expect this!"),
             }
@@ -267,15 +274,39 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
 
         operations.reverse();
         PairwiseAlignment {
-            score: aligner.S[n % 2][m],
+            score: cur_aligner.S[n % 2][m],
             ystart,
             xstart,
             yend,
             xend,
-            ylen: n,
             xlen: m,
+            ylen: n,
+            is_forward: cur_is_forward,
             operations,
             mode: AlignmentMode::Custom,
+        }
+    }
+
+    fn fill_x_buffer_stranded(&mut self, m: usize) {
+        for i in 1..=m {
+            let (fwd_score, fwd_from, fwd_strand) = self.forward.x_buffer.get(i);
+            let (rev_score, rev_from, rev_strand) = self.reverse.x_buffer.get(i);
+            assert!(!fwd_strand, "Bug: fwd strand");
+            assert!(!rev_strand, "Bug: rev strand");
+
+            let fwd_to_rev_score = fwd_score + self.forward.scoring.jump_score;
+            let rev_to_fwd_score = rev_score + self.reverse.scoring.jump_score;
+
+            if fwd_score < rev_to_fwd_score {
+                self.forward
+                    .x_buffer
+                    .set(i, rev_to_fwd_score, rev_from, true);
+            }
+            if rev_score < fwd_to_rev_score {
+                self.reverse
+                    .x_buffer
+                    .set(i, fwd_to_rev_score, fwd_from, true);
+            }
         }
     }
 
@@ -285,8 +316,14 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     ///
     /// * `x` - Textslice
     /// * `y` - Textslice
-    pub fn custom(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
-        let (m, n) = (x.len(), y.len());
+    pub fn custom(
+        &mut self,
+        x_forward: TextSlice<'_>,
+        x_revcomp: TextSlice<'_>,
+        y: TextSlice<'_>,
+    ) -> PairwiseAlignment {
+        let (m, n) = (x_forward.len(), y.len());
+        assert!(x_forward.len() == x_revcomp.len(), "X length mismatch");
 
         // Set the initial conditions
         // We are repeating some work, but that's okay!
@@ -298,23 +335,37 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
             let prev = 1 - curr;
 
             // Initialize the column
-            self.forward.init_column(j, prev, curr, m, n);
-            self.reverse.init_column(j, prev, curr, m, n);
+            self.forward.init_column(j, curr, m, n);
+            self.reverse.init_column(j, curr, m, n);
+
+            // Initiliaze the jump buffers
+            self.forward
+                .x_buffer
+                .fill(m, prev, &self.forward.S, &self.forward.scoring);
+            self.reverse
+                .x_buffer
+                .fill(m, prev, &self.reverse.S, &self.reverse.scoring);
+            self.fill_x_buffer_stranded(m);
 
             // Fill the column
-            self.forward.fill_column(x, y, m, n, j, prev, curr);
-            self.reverse.fill_column(x, y, m, n, j, prev, curr);
+            self.forward.fill_column(x_forward, y, m, n, j, prev, curr);
+            self.reverse.fill_column(x_revcomp, y, m, n, j, prev, curr);
         }
 
         self.forward.fill_last_column_and_end_clipping(m, n);
         self.reverse.fill_last_column_and_end_clipping(m, n);
 
         // Traceback...
-        self.do_traceback(x, y, m, n)
+        self.do_traceback(m, n)
     }
 
     /// Calculate global alignment of x against y.
-    pub fn global(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
+    pub fn global(
+        &mut self,
+        x_forward: TextSlice<'_>,
+        x_revcomp: TextSlice<'_>,
+        y: TextSlice<'_>,
+    ) -> PairwiseAlignment {
         // Store the current clip penalties
         let forward_clip_penalties = [
             self.forward.scoring.xclip_prefix,
@@ -340,7 +391,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.reverse.scoring.yclip_suffix = MIN_SCORE;
 
         // Compute the alignment
-        let mut alignment = self.custom(x, y);
+        let mut alignment = self.custom(x_forward, x_revcomp, y);
         alignment.mode = AlignmentMode::Global;
 
         // Set the clip penalties to the original values
@@ -356,64 +407,12 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     }
 
     /// Calculate semiglobal alignment of x against y (x is global, y is local).
-    pub fn semiglobal(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
-        // Store the current clip penalties
-        let forward_clip_penalties = [
-            self.forward.scoring.xclip_prefix,
-            self.forward.scoring.xclip_suffix,
-            self.forward.scoring.yclip_prefix,
-            self.forward.scoring.yclip_suffix,
-        ];
-        let reverse_clip_penalties = [
-            self.reverse.scoring.xclip_prefix,
-            self.reverse.scoring.xclip_suffix,
-            self.reverse.scoring.yclip_prefix,
-            self.reverse.scoring.yclip_suffix,
-        ];
-
-        // Temporarily Over-write the clip penalties
-        self.forward.scoring.xclip_prefix = MIN_SCORE;
-        self.forward.scoring.xclip_suffix = MIN_SCORE;
-        self.forward.scoring.yclip_prefix = 0;
-        self.forward.scoring.yclip_suffix = 0;
-        self.reverse.scoring.xclip_prefix = MIN_SCORE;
-        self.reverse.scoring.xclip_suffix = MIN_SCORE;
-        self.reverse.scoring.yclip_prefix = 0;
-        self.reverse.scoring.yclip_suffix = 0;
-
-        // Compute the alignment
-        let mut alignment = self.custom(x, y);
-        alignment.mode = AlignmentMode::Semiglobal;
-
-        // Filter out Xclip and Yclip from alignment.operations
-        {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xskip};
-            alignment.operations.retain(|x| {
-                *x == Match
-                    || *x == Subst
-                    || *x == Ins
-                    || *x == Del
-                    || matches!(*x, Xclip(_))
-                    || matches!(*x, Xskip(_))
-            });
-        }
-
-        // Set the clip penalties to the original values
-
-        self.forward.scoring.xclip_prefix = forward_clip_penalties[0];
-        self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
-        self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
-        self.forward.scoring.yclip_suffix = forward_clip_penalties[3];
-        self.reverse.scoring.xclip_prefix = reverse_clip_penalties[0];
-        self.reverse.scoring.xclip_suffix = reverse_clip_penalties[1];
-        self.reverse.scoring.yclip_prefix = reverse_clip_penalties[2];
-        self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
-
-        alignment
-    }
-
-    /// Calculate semiglobal alignment of x against y (x is local, y is global).
-    pub fn semiglobal2(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
+    pub fn semiglobal(
+        &mut self,
+        x_forward: TextSlice<'_>,
+        x_revcomp: TextSlice<'_>,
+        y: TextSlice<'_>,
+    ) -> PairwiseAlignment {
         // Store the current clip penalties
         let forward_clip_penalties = [
             self.forward.scoring.xclip_prefix,
@@ -439,12 +438,12 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.reverse.scoring.yclip_suffix = MIN_SCORE;
 
         // Compute the alignment
-        let mut alignment = self.custom(x, y);
+        let mut alignment = self.custom(x_forward, x_revcomp, y);
         alignment.mode = AlignmentMode::Semiglobal;
 
         // Filter out Xclip and Yclip from alignment.operations
         {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xskip};
+            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xflip, Xskip};
             alignment.operations.retain(|x| {
                 *x == Match
                     || *x == Subst
@@ -452,6 +451,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
                     || *x == Del
                     || matches!(*x, Xclip(_))
                     || matches!(*x, Xskip(_))
+                    || matches!(*x, Xflip(_))
             });
         }
 
@@ -470,7 +470,12 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     }
 
     /// Calculate local alignment of x against y.
-    pub fn local(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
+    pub fn local(
+        &mut self,
+        x_forward: TextSlice<'_>,
+        x_revcomp: TextSlice<'_>,
+        y: TextSlice<'_>,
+    ) -> PairwiseAlignment {
         // Store the current clip penalties
         let forward_clip_penalties = [
             self.forward.scoring.xclip_prefix,
@@ -496,12 +501,12 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.reverse.scoring.yclip_suffix = 0;
 
         // Compute the alignment
-        let mut alignment = self.custom(x, y);
+        let mut alignment = self.custom(x_forward, x_revcomp, y);
         alignment.mode = AlignmentMode::Local;
 
         // Filter out Xclip and Yclip from alignment.operations
         {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xskip};
+            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xflip, Xskip};
             alignment.operations.retain(|x| {
                 *x == Match
                     || *x == Subst
@@ -509,6 +514,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
                     || *x == Del
                     || matches!(*x, Xclip(_))
                     || matches!(*x, Xskip(_))
+                    || matches!(*x, Xflip(_))
             });
         }
 

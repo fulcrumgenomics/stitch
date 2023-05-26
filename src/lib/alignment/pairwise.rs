@@ -31,6 +31,9 @@ pub struct PairwiseAlignment {
     /// Length of the query sequence
     pub xlen: usize,
 
+    /// If the aligmnent starts on the forward strand (used for double strand alignment)
+    pub is_forward: bool,
+
     /// Vector of alignment operations
     pub operations: Vec<AlignmentOperation>,
     pub mode: AlignmentMode,
@@ -50,6 +53,7 @@ pub fn padded_string(
     let mut query_buf: String = String::new();
     let mut align_buf: String = String::new();
     let mut target_buf: String = String::new();
+    // TODO: need to revcomp query/target if Xflip is contained...
 
     let mut query_offset = alignment.xstart;
     let mut target_offset = alignment.ystart;
@@ -77,6 +81,16 @@ pub fn padded_string(
             align_buf.push(' ');
             target_buf.push(target[target_offset] as char);
             target_offset += 1;
+        }
+        AlignmentOperation::Xflip(from_i) => {
+            if query_buf.chars().nth(query_buf.len() - 1).unwrap() != ' '
+                && target_buf.chars().nth(target_buf.len() - 1).unwrap() != ' '
+            {
+                query_buf.push('X');
+                align_buf.push('X');
+                target_buf.push('X');
+            }
+            query_offset = from_i;
         }
         AlignmentOperation::Xskip(from_i) => {
             if query_buf.chars().nth(query_buf.len() - 1).unwrap() != ' '

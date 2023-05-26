@@ -17,7 +17,8 @@ pub struct TracebackCell {
 pub const I_POS: u8 = 0; // Meaning bits 0,1,2,3 corresponds to I and so on
 pub const D_POS: u8 = 4;
 pub const S_POS: u8 = 8;
-pub const L_POS: u8 = 12;
+pub const X_POS: u8 = 12;
+pub const L_POS: u8 = 13;
 
 // Traceback moves
 pub const TB_START: u32 = 0b0000;
@@ -72,10 +73,18 @@ impl TracebackCell {
     }
 
     #[inline(always)]
-    pub fn set_l_bits(&mut self, value: u32) {
-        // Traceback corresponding to matrix S
-        let bits: u32 = (0b1111) << L_POS;
+    pub fn set_x_bits(&mut self, value: u32) {
+        // Traceback corresponding to matrix S (strand)
+        let bits: u32 = (0b1) << X_POS;
         self.v = (self.v & !bits) // First clear the bits
+            | (value << X_POS) // And set the bits
+    }
+
+    #[inline(always)]
+    pub fn set_l_bits(&mut self, value: u32) {
+        // Traceback corresponding to matrix S (from length)
+        let bits: u32 = (0b000_0000_0000_0000_0000) << L_POS;
+        self.v = (self.v & bits) // First clear the bits
             | (value << L_POS) // And set the bits
     }
 
@@ -98,6 +107,11 @@ impl TracebackCell {
     #[inline(always)]
     pub fn get_s_bits(self) -> u32 {
         self.get_bits(S_POS)
+    }
+
+    #[inline(always)]
+    pub fn get_x_bits(self) -> u32 {
+        (self.v >> X_POS) & (0b1)
     }
 
     #[inline(always)]
@@ -136,6 +150,7 @@ impl Traceback {
         self.matrix.clear();
         let mut start = TracebackCell::new();
         start.set_all(TB_START);
+        start.set_x_bits(0);
         start.set_l_bits(0);
         // set every cell to start
         self.resize(m, n, start);

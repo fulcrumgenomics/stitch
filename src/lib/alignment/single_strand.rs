@@ -10,17 +10,16 @@ use std::i32;
 use std::iter::repeat;
 
 use crate::alignment::constants::AlignmentMode;
+use crate::alignment::scoring::Scoring;
+use bio::alignment::pairwise::MatchFunc;
 use bio::utils::TextSlice;
-use serde::Deserialize;
-use serde::Serialize;
 
 use crate::alignment::constants::AlignmentOperation;
 use crate::alignment::constants::DEFAULT_ALIGNER_CAPACITY;
 use crate::alignment::pairwise::PairwiseAlignment;
-use crate::alignment::scoring::MatchFunc;
-use crate::alignment::scoring::Scoring;
 use crate::alignment::traceback::Traceback;
 use crate::alignment::traceback::TracebackCell;
+use crate::alignment::x_buffer::XBuffer;
 
 use super::constants::MIN_SCORE;
 use super::traceback::TB_DEL;
@@ -32,70 +31,6 @@ use super::traceback::TB_XCLIP_PREFIX;
 use super::traceback::TB_XCLIP_SUFFIX;
 use super::traceback::TB_YCLIP_PREFIX;
 use super::traceback::TB_YCLIP_SUFFIX;
-
-#[derive(Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
-struct XBuffer {
-    score: Vec<i32>,
-    from: Vec<usize>,
-}
-
-impl XBuffer {
-    fn new(m: usize, n: usize) -> Self {
-        let mut score_buffer = Vec::with_capacity(m + 1);
-        let mut from_buffer = Vec::with_capacity(m + 1);
-        score_buffer.extend(repeat(MIN_SCORE).take(m + 1));
-        from_buffer.extend(repeat(0).take(m + 1));
-        XBuffer {
-            score: score_buffer,
-            from: from_buffer,
-        }
-    }
-
-    fn fill<F: MatchFunc>(
-        &mut self,
-        m: usize,
-        n: usize,
-        prev: usize,
-        S: [Vec<i32>; 2],
-        scoring: Scoring<F>,
-    ) {
-        // NB: do not jump from the first/last `i`
-        self.score[m] = MIN_SCORE;
-        self.from[m] = m;
-        for i in (1..m).rev() {
-            if self.score[i + 1] >= S[prev][i] {
-                self.score[i] = self.score[i + 1];
-                self.from[i] = self.from[i + 1];
-            } else {
-                self.score[i] = S[prev][i];
-                self.from[i] = i;
-            };
-        }
-        self.score[0] = MIN_SCORE;
-
-        let mut earlier_jump_score = MIN_SCORE;
-        let mut earlier_jump_length = 0;
-        self.score[0] += scoring.jump_score;
-        for i in 1..=m {
-            if 2 <= i {
-                let score = S[prev][i - 2] + scoring.jump_score;
-                if score >= earlier_jump_score {
-                    earlier_jump_score = score;
-                    earlier_jump_length = i - 2;
-                }
-            }
-
-            let later_jump_score = self.score[i] + scoring.jump_score;
-            let diagonal_score = S[prev][i - 1];
-            self.score[i] = max(earlier_jump_score, max(diagonal_score, later_jump_score));
-            if diagonal_score == self.score[i] {
-                self.from[i] = i - 1;
-            } else if earlier_jump_score == self.score[i] {
-                self.from[i] = earlier_jump_length;
-            }
-        }
-    }
-}
 
 /// A generalized Smith-Waterman aligner, allowing for the alignment to jump forward
 /// (or backward) in `x` (on the same strand).
@@ -142,7 +77,6 @@ impl XBuffer {
 ///
 /// `scoring` - see [`bio::alignment::pairwise::Scoring`](struct.Scoring.html)
 #[allow(non_snake_case)]
-#[derive(Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 pub struct SingleStrandAligner<F: MatchFunc> {
     pub I: [Vec<i32>; 2],
     pub D: [Vec<i32>; 2],
@@ -152,11 +86,10 @@ pub struct SingleStrandAligner<F: MatchFunc> {
     pub Sn: Vec<i32>,
     pub traceback: Traceback,
     pub scoring: Scoring<F>,
-    x_buffer: XBuffer,
+    pub x_buffer: XBuffer,
 }
 
 impl<F: MatchFunc> SingleStrandAligner<F> {
-    // TODO: there's code duplication with single_strand
     pub fn init_matrices(&mut self, m: usize, n: usize) {
         self.traceback.init(m, n);
 
@@ -176,6 +109,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             if k == 0 {
                 let mut tb = TracebackCell::new();
                 tb.set_all(TB_START);
+                tb.set_x_bits(0);
                 tb.set_l_bits(0);
                 self.traceback.set(0, 0, tb);
                 self.Lx.clear();
@@ -191,6 +125,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             for i in 1..=m {
                 let mut tb = TracebackCell::new();
                 tb.set_all(TB_START);
+                tb.set_x_bits(0);
                 tb.set_l_bits(0);
                 if i == 1 {
                     self.I[k][i] = self.scoring.gap_open + self.scoring.gap_extend;
@@ -243,7 +178,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         }
     }
 
-    pub fn init_column(&mut self, j: usize, prev: usize, curr: usize, m: usize, n: usize) {
+    pub fn init_column(&mut self, j: usize, curr: usize, m: usize, n: usize) {
         // Handle i = 0 case
         let mut tb = TracebackCell::new();
         self.I[curr][0] = MIN_SCORE;
@@ -287,9 +222,6 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         for i in 1..=m {
             self.S[curr][i] = MIN_SCORE;
         }
-
-        // FIXME: need the oppositves .S
-        self.x_buffer.fill(m, n, prev, self.S, self.scoring);
     }
 
     pub fn fill_column(
@@ -309,12 +241,12 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 self.scoring.gap_open + self.scoring.gap_extend * (j as i32),
             );
         for i in 1..=m {
-            let p = x[i - 1];
+            let p: u8 = x[i - 1];
             let mut tb = TracebackCell::new();
 
             let addend = self.scoring.match_fn.score(p, q);
-            let m_score = self.x_buffer.score[i] + addend;
-            let m_score_from_i = self.x_buffer.from[i];
+            let (x_buffer_score, m_score_from_i, m_score_flip_strand) = self.x_buffer.get(i);
+            let m_score: i32 = x_buffer_score + addend;
 
             let i_score = self.I[curr][i - 1] + self.scoring.gap_extend;
             let s_score = self.S[curr][i - 1] + self.scoring.gap_open + self.scoring.gap_extend;
@@ -344,7 +276,8 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             if m_score > best_s_score {
                 best_s_score = m_score;
                 tb.set_s_bits(if p == q { TB_MATCH } else { TB_SUBST });
-                tb.set_l_bits(m_score_from_i as u32);
+                tb.set_x_bits(u32::from(m_score_flip_strand));
+                tb.set_l_bits(m_score_from_i);
             }
 
             if best_i_score > best_s_score {
@@ -482,7 +415,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             Sn: Vec::with_capacity(m + 1),
             traceback: Traceback::with_capacity(m, n),
             scoring: Scoring::new(gap_open, gap_extend, jump_score, match_fn),
-            x_buffer: XBuffer::new(m, n),
+            x_buffer: XBuffer::new(m),
         }
     }
 
@@ -536,20 +469,14 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             Sn: Vec::with_capacity(m + 1),
             traceback: Traceback::with_capacity(m, n),
             scoring,
-            x_buffer: XBuffer::new(m, n),
+            x_buffer: XBuffer::new(m),
         }
     }
 
-    fn do_traceback(
-        &mut self,
-        x: TextSlice<'_>,
-        y: TextSlice<'_>,
-        m: usize,
-        n: usize,
-    ) -> PairwiseAlignment {
+    fn do_traceback(&mut self, m: usize, n: usize) -> PairwiseAlignment {
         let mut i = m;
         let mut j = n;
-        let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(x.len());
+        let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(m);
         let mut xstart: usize = 0usize;
         let mut ystart: usize = 0usize;
         let mut xend = m;
@@ -576,9 +503,11 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                     } else {
                         operations.push(AlignmentOperation::Subst);
                     }
+                    let from_flip_strand = self.traceback.get(i, j).get_x_bits() == 1;
+                    assert!(!from_flip_strand, "Bug: flip in single-strand");
                     let from_i = self.traceback.get(i, j).get_l_bits() as usize;
                     if from_i != i - 1 {
-                        operations.push(AlignmentOperation::Xskip(i - 1));
+                        operations.push(AlignmentOperation::Xskip(from_i));
                     }
                     next_layer = self.traceback.get(from_i, j - 1).get_s_bits();
                     i = from_i;
@@ -622,6 +551,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             xend,
             ylen: n,
             xlen: m,
+            is_forward: true,
             operations,
             mode: AlignmentMode::Custom,
         }
@@ -644,7 +574,10 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             let prev = 1 - curr;
 
             // Initialize the column
-            self.init_column(j, prev, curr, m, n);
+            self.init_column(j, curr, m, n);
+
+            // Initiliaze the jump buffers
+            self.x_buffer.fill(m, prev, &self.S, &self.scoring);
 
             // Fill the column
             self.fill_column(x, y, m, n, j, prev, curr);
@@ -652,7 +585,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
         self.fill_last_column_and_end_clipping(m, n);
 
-        self.do_traceback(x, y, m, n)
+        self.do_traceback(m, n)
     }
 
     /// Calculate global alignment of x against y.
@@ -686,48 +619,6 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
     /// Calculate semiglobal alignment of x against y (x is global, y is local).
     pub fn semiglobal(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
-        // Store the current clip penalties
-        let clip_penalties = [
-            self.scoring.xclip_prefix,
-            self.scoring.xclip_suffix,
-            self.scoring.yclip_prefix,
-            self.scoring.yclip_suffix,
-        ];
-
-        // Temporarily Over-write the clip penalties
-        self.scoring.xclip_prefix = MIN_SCORE;
-        self.scoring.xclip_suffix = MIN_SCORE;
-        self.scoring.yclip_prefix = 0;
-        self.scoring.yclip_suffix = 0;
-
-        // Compute the alignment
-        let mut alignment = self.custom(x, y);
-        alignment.mode = AlignmentMode::Semiglobal;
-
-        // Filter out Xclip and Yclip from alignment.operations
-        {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xskip};
-            alignment.operations.retain(|x| {
-                *x == Match
-                    || *x == Subst
-                    || *x == Ins
-                    || *x == Del
-                    || matches!(*x, Xclip(_))
-                    || matches!(*x, Xskip(_))
-            });
-        }
-
-        // Set the clip penalties to the original values
-        self.scoring.xclip_prefix = clip_penalties[0];
-        self.scoring.xclip_suffix = clip_penalties[1];
-        self.scoring.yclip_prefix = clip_penalties[2];
-        self.scoring.yclip_suffix = clip_penalties[3];
-
-        alignment
-    }
-
-    /// Calculate semiglobal alignment of x against y (x is local, y is global).
-    pub fn semiglobal2(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
         // Store the current clip penalties
         let clip_penalties = [
             self.scoring.xclip_prefix,

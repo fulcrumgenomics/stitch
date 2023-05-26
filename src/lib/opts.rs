@@ -18,6 +18,10 @@ pub struct Opts {
     #[clap(long, short = 'r', display_order = 2)]
     pub ref_fasta: PathBuf,
 
+    /// The path to the referece vector/plasmid/construct FASTA sequence.
+    #[clap(long, short = 'd', default_value = "false", display_order = 2)]
+    pub double_strand: bool,
+
     /// The number of threads to use.
     #[clap(long, short = 't', default_value = "2", display_order = 3)]
     pub threads: usize,
@@ -70,6 +74,7 @@ pub struct Opts {
     #[clap(long, short = 'J', default_value = "-10", display_order = 15)]
     pub jump_score: i32,
 
+    /// FIXME: not wired in
     /// The alignment mode
     #[clap(long, short = 'm', default_value = "local", display_order = 16)]
     pub mode: AlignmentMode,

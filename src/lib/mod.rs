@@ -15,6 +15,7 @@ pub mod alignment;
 mod io;
 pub mod opts;
 pub mod run;
+pub mod target_seq;
 pub mod util;
 
 /// Returns true if the path ends with a recognized GZIP file extension
