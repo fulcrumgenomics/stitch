@@ -94,6 +94,7 @@ impl XBuffer {
         // base case
         let mut prev_prefix_score = S[prev][0] + scoring.jump_score;
         let mut prev_prefix_from = 0u32;
+        // iterate over k in ascending order
         for k in 1..=m {
             // compute prefix_score[k]
             let cur_prefix_score = S[prev][k] + scoring.jump_score;
