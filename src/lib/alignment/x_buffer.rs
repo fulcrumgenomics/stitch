@@ -63,7 +63,7 @@ impl XBuffer {
         scoring: &Scoring<F>,
     ) {
         // The current base in `y` is fixed (i.e. index `j`), but we can move from anywhere in `x`.
-        // For a given `i`, we want to find the `k` that yields the maximum score.
+        // For a given `i`, we want to find jump from `k` that yields the maximum score.
         // We can compute this in two passes:
         // 1. suffix_score[k] = max(suffix_score[k + 1], S[prev][k] + jump_penalty)
         // 2. prefix_score[k] = max(prefix_score[k - 1], S[prev][k] + jump_penalty)
