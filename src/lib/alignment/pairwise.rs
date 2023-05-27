@@ -39,18 +39,6 @@ pub struct PairwiseAlignment {
     pub mode: AlignmentMode,
 }
 
-impl PairwiseAlignment {
-    /// The aligned length of y
-    pub fn y_aligned_len(&self) -> usize {
-        self.yend - self.ystart
-    }
-
-    /// The aligned length of x
-    pub fn x_aligned_len(&self) -> usize {
-        self.xend - self.xstart
-    }
-}
-
 /// Generates a padded text representation of the alignment for visualization. The returned
 /// sequence will consist of three lines as follows (minus the labels on the left):
 ///

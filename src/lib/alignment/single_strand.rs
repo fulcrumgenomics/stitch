@@ -11,6 +11,7 @@ use std::iter::repeat;
 
 use crate::alignment::constants::AlignmentMode;
 use crate::alignment::scoring::Scoring;
+use crate::alignment::traceback::TB_XJUMP;
 use bio::alignment::pairwise::MatchFunc;
 use bio::alignment::pairwise::MatchParams;
 use bio::utils::TextSlice;
@@ -177,7 +178,13 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 }
 
                 // Track the score if we do a suffix clip (x) after this character
-                if i != m && self.S[k][i] + self.scoring.xclip_suffix > self.S[k][m] {
+                let do_x_suffix_clip = i != m
+                    && match (self.S[k][i] + self.scoring.xclip_suffix).cmp(&self.S[k][m]) {
+                        std::cmp::Ordering::Less => false,
+                        std::cmp::Ordering::Greater => true,
+                        std::cmp::Ordering::Equal => i < m && m - i < self.Lx[0],
+                    };
+                if do_x_suffix_clip {
                     self.S[k][m] = self.S[k][i] + self.scoring.xclip_suffix;
                     self.Lx[0] = m - i;
                 }
@@ -185,8 +192,15 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 if k == 0 {
                     self.traceback.set(i, 0, tb);
                 }
+
                 // Track the score if we do suffix clip (y) from here
-                if self.S[k][i] + self.scoring.yclip_suffix > self.Sn[i] {
+                let do_y_suffix_clip =
+                    match (self.S[k][i] + self.scoring.yclip_suffix).cmp(&self.Sn[i]) {
+                        std::cmp::Ordering::Less => false,
+                        std::cmp::Ordering::Greater => true,
+                        std::cmp::Ordering::Equal => n < self.Ly[i],
+                    };
+                if do_y_suffix_clip {
                     self.Sn[i] = self.S[k][i] + self.scoring.yclip_suffix;
                     self.Ly[i] = n;
                 }
@@ -227,12 +241,18 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             tb.set_s_bits(TB_YCLIP_PREFIX);
         }
 
+        let do_x_suffix_clip = match (self.S[curr][0] + self.scoring.yclip_suffix).cmp(&self.Sn[0])
+        {
+            std::cmp::Ordering::Less => false,
+            std::cmp::Ordering::Greater => true,
+            std::cmp::Ordering::Equal => n - j < self.Ly[0],
+        };
+
+        // Track the score if we do suffix clip (y) from here
         if j == n && self.Sn[0] > self.S[curr][0] {
-            // Check if the suffix clip score is better
             self.S[curr][0] = self.Sn[0];
             tb.set_s_bits(TB_YCLIP_SUFFIX);
-        // Track the score if we do suffix clip (y) from here
-        } else if self.S[curr][0] + self.scoring.yclip_suffix > self.Sn[0] {
+        } else if do_x_suffix_clip {
             self.Sn[0] = self.S[curr][0] + self.scoring.yclip_suffix;
             self.Ly[0] = n - j;
         }
@@ -254,6 +274,17 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         prev: usize,
         curr: usize,
     ) {
+        // loop 1: fill in self.S, self.I, and self.D, no jumps, no suffix clipping
+        // loop 2: adjust self.S to allow for jumps
+        //         - examine self.S[curr][i] for all i
+        //         - if self.S[curr][k] + self.scoring.jump_score > self.S[curr][i] for any k != i, then update:
+        //            - self.S[curr][i] = self.S[curr][k] + self.scoring.jump_score
+        //            - self.traceback(i, j).set_s_bits(self.traceback(k, j).get_s_bits())
+        //            - self.traceback(i, j).set_s_from(self.traceback(k, j).get_s_from())
+        //            - self.traceback(i, j).set_s_strand(self.traceback(k, j).set_s_strand())
+        //         - use x_buffer for this
+        // loop 3: calculate suffix clipping
+
         let q = y[j - 1];
         let xclip_score = self.scoring.xclip_prefix
             + max(
@@ -268,11 +299,14 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             let (x_jump_score, x_jump_from, x_jump_flip_strand) = self.x_buffer.get(i);
             let diag_score = self.S[prev][i - 1];
             let (m_score, m_from, m_flip_strand) = {
-                let addend = self.scoring.match_fn.score(p, q);
-                if diag_score >= x_jump_score {
-                    (diag_score + addend, (i - 1) as u32, false)
-                } else {
+                let addend: i32 = self.scoring.match_fn.score(p, q);
+                // Prefer longer alignments, so jump instead of moving along the diagonal.  This
+                // does not guarantee longer alignments; for that we'd need to track the current
+                // alignment length.
+                if x_jump_score >= diag_score {
                     (x_jump_score + addend, x_jump_from, x_jump_flip_strand)
+                } else {
+                    (diag_score + addend, (i - 1) as u32, false)
                 }
             };
 
@@ -307,7 +341,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 tb.set_d_bits(self.traceback.get(i, j - 1).get_s_bits());
             }
 
-            tb.set_s_bits(TB_XCLIP_SUFFIX);
+            tb.set_s_bits(TB_XCLIP_SUFFIX); // set this to x-clip suffix since we may set self.S[curr][m] below
             let mut best_s_score = self.S[curr][i];
 
             if m_score > best_s_score {
@@ -345,35 +379,124 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             self.D[curr][i] = best_d_score;
 
             // Track the score if we do suffix clip (x) from here
-            if self.S[curr][i] + self.scoring.xclip_suffix > self.S[curr][m] {
+            let do_x_suffix_clip =
+                match (self.S[curr][i] + self.scoring.xclip_suffix).cmp(&self.S[curr][m]) {
+                    std::cmp::Ordering::Less => false,
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Equal => i < m && m - i < self.Lx[j],
+                };
+            if do_x_suffix_clip {
                 self.S[curr][m] = self.S[curr][i] + self.scoring.xclip_suffix;
+                self.traceback.get_mut(m, j).set_s_bits(TB_XCLIP_SUFFIX);
                 self.Lx[j] = m - i;
             }
 
             // Track the score if we do suffix clip (y) from here
-            if self.S[curr][i] + self.scoring.yclip_suffix > self.Sn[i] {
+            let do_y_suffix_clip =
+                match (self.S[curr][i] + self.scoring.yclip_suffix).cmp(&self.Sn[i]) {
+                    std::cmp::Ordering::Less => false,
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Equal => j < n && n - j < self.Ly[i],
+                };
+            // if i == 20 && j == 30 {
+            //     eprintln!(
+            //         "fill i: {i} j: {j} do_y_suffix_clip: {do_y_suffix_clip} self.S[curr][i]: {} self.Sn[i]: {} self.Ly[i]: {} n-j: {}",
+            //         self.S[curr][i], self.Sn[i], self.Ly[i], n - j
+            //     );
+            // }
+            if i == 20 || i == 30 {
+                eprintln!(
+                    "sn i: {i} j: {j} do_y_suffix_clip: {do_y_suffix_clip} self.S[curr][i]: {} self.Sn[i]: {} self.Ly[i]: {} n-j: {}",
+                    self.S[curr][i], self.Sn[i], self.Ly[i], n - j
+                );
+            }
+            if do_y_suffix_clip {
                 self.Sn[i] = self.S[curr][i] + self.scoring.yclip_suffix;
                 self.Ly[i] = n - j;
             }
+
+            //    [0 ...... 9] [20 .... 29] [10 .... 19] i=20 x_jump i=30 y-clip i=30 x-clip i=39
+            // x: [AAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG]
+            // y:  AAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG
+            //    [0 ...... 9] [10 .... 19] [20 .... 29] j=30 x_jump j=30 y-clip j=39 x-clip j=39
+            // if i - 1 == 19 && j - 1 == 29 {
+            //     let s_bits = tb.get_s_bits();
+            //     eprintln!(
+            //         "  i: {i} j: {j} self.S[curr][i]: {} s_bits: {s_bits} do_x_suffix_clip: {do_x_suffix_clip} do_y_suffix_clip: {do_y_suffix_clip}",
+            //         self.S[curr][i]
+            //     );
+            //     eprintln!(
+            //         "i: {i} j: {j} do_y_suffix_clip: {do_y_suffix_clip} self.S[curr][i]: {} self.Sn[i]: {} self.Ly[i]: {} n-j: {}",
+            //         self.S[curr][i], self.Sn[i], self.Ly[i], n - j
+            //     );
+            // }
+
+            // if i - 1 == 38 && j - 1 == 29 {
+            //     let s_bits = tb.get_s_bits();
+            //     eprintln!(
+            //         "i: {i} j: {j} self.S[curr][i]: {} s_bits: {s_bits} do_x_suffix_clip: {do_x_suffix_clip} do_y_suffix_clip: {do_y_suffix_clip} self.Ly[i]: {}",
+            //         self.S[curr][i], self.Ly[i]
+            //     );
+            // }
 
             self.traceback.set(i, j, tb);
         }
     }
 
     pub fn fill_last_column_and_end_clipping(&mut self, m: usize, n: usize) {
-        // Handle suffix clipping in the j=n case
+        // Handle jumping over the remaining i bases in x and suffix clipping, in the j=n case
+
         for i in 0..=m {
-            let j = n;
-            let curr = j % 2;
-            if self.Sn[i] > self.S[curr][i] {
+            let j: usize = n; // end of y
+            let curr: usize = j % 2;
+
+            // jump over the remaining i bases in x
+            if self.S[curr][i] + self.scoring.jump_score > self.S[curr][m] {
+                self.S[curr][m] = self.S[curr][i] + self.scoring.jump_score;
+                self.traceback.get_mut(m, j).set_s_bits(TB_XJUMP);
+                self.traceback.get_mut(m, j).set_s_flip_strand(false);
+                self.traceback.get_mut(m, j).set_s_from(i as u32);
+            }
+
+            // y-clip
+            let do_y_suffix_clip = match (self.Sn[i]).cmp(&self.S[curr][i]) {
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => j < n && n - j < self.Ly[i],
+            };
+            eprintln!(
+                "fill_last i: {i} j: {j} self.Sn[i]: {} self.S[curr][i]: {} n - j: {} self.Ly[i]: {} do_y_suffix_clip: {do_y_suffix_clip}",
+                self.Sn[i],
+                self.S[curr][i],
+                n - j,
+                self.Ly[i]
+            );
+            if do_y_suffix_clip {
                 self.S[curr][i] = self.Sn[i];
+                // no need to set Ly[i] since it's already set in fill_last_column
                 self.traceback.get_mut(i, j).set_s_bits(TB_YCLIP_SUFFIX);
             }
-            if self.S[curr][i] + self.scoring.xclip_suffix > self.S[curr][m] {
+
+            // x-clip
+            let do_x_suffix_clip =
+                match (self.S[curr][i] + self.scoring.xclip_suffix).cmp(&self.S[curr][m]) {
+                    std::cmp::Ordering::Less => false,
+                    std::cmp::Ordering::Greater => true,
+                    std::cmp::Ordering::Equal => i < m && m - i < self.Lx[j],
+                };
+            if do_x_suffix_clip {
                 self.S[curr][m] = self.S[curr][i] + self.scoring.xclip_suffix;
                 self.Lx[j] = m - i;
                 self.traceback.get_mut(m, j).set_s_bits(TB_XCLIP_SUFFIX);
             }
+
+            // eprintln!("i: {i} j: {j} do_y_suffix_clip: {do_y_suffix_clip} do_x_suffix_clip: {do_x_suffix_clip}");
+        }
+
+        {
+            let tb = self.traceback.get_mut(m, n);
+            let s_bits = tb.get_s_bits();
+            eprintln!("i: {m} j: {n} s_bits: {s_bits} self.Lx[n]: {}", self.Lx[n]);
         }
 
         // Since there could be a change in the last column of S,
@@ -381,14 +504,15 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         for i in 1..=m {
             let j = n;
             let curr = j % 2;
-            let s_score = self.S[curr][i - 1] + self.scoring.gap_open + self.scoring.gap_extend;
-            if s_score > self.I[curr][i] {
-                self.I[curr][i] = s_score;
+            let i_score = self.S[curr][i - 1] + self.scoring.gap_open + self.scoring.gap_extend;
+            if i_score > self.I[curr][i] {
+                self.I[curr][i] = i_score;
                 let s_bit = self.traceback.get(i - 1, j).get_s_bits();
                 self.traceback.get_mut(i, j).set_i_bits(s_bit);
             }
-            if s_score > self.S[curr][i] {
-                self.S[curr][i] = s_score;
+
+            if i_score > self.S[curr][i] {
+                self.S[curr][i] = i_score;
                 self.traceback.get_mut(i, j).set_s_bits(TB_INS);
                 if self.S[curr][i] + self.scoring.xclip_suffix > self.S[curr][m] {
                     self.S[curr][m] = self.S[curr][i] + self.scoring.xclip_suffix;
@@ -522,6 +646,11 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         let mut last_layer = self.traceback.get(i, j).get_s_bits();
         loop {
             let next_layer: u16;
+            //    [0 ...... 9] [20 .... 29] [10 .... 19]
+            // x: [AAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG]          TTTTTTTTT
+            // y:  AAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG TTTTTTTTT
+            //    [0 ...... 9] [10 .... 19] [20 .... 29]
+            eprintln!("last_layer: {last_layer} i: {i} j: {j}");
             match last_layer {
                 TB_START => break,
                 TB_INS => {
@@ -592,12 +721,22 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                     yend = j;
                     next_layer = self.traceback.get(i, j).get_s_bits();
                 }
-                _ => panic!("Dint expect this!"),
+                TB_XJUMP => {
+                    assert!(i == 0 || i == m);
+                    let s_from = self.traceback.get(i, j).get_s_from() as usize;
+                    let s_flip_strand = self.traceback.get(i, j).get_s_flip_strand();
+                    assert!(!s_flip_strand); // single stranded!
+                    operations.push(AlignmentOperation::Xskip(s_from));
+                    next_layer = self.traceback.get(s_from, j - 1).get_s_bits();
+                    i = s_from;
+                }
+                layer => panic!("Uknown move: {layer}!"),
             }
             last_layer = next_layer;
         }
 
         operations.reverse();
+        eprintln!("operations: {operations:?}");
         {
             use self::AlignmentOperation::{Xclip, Xskip, Yclip};
             if operations
@@ -1060,11 +1199,11 @@ pub mod tests {
         );
     }
 
-    /// NB: if the jump score is set to -10, then the alignment would jump back in x (3bp), to give
-    /// 17 matches (+17) and one jump (-10) for a score of 7, which is greater than 14 matches (+14)
-    /// and a 3bp deletion (-5 - 1 - 1 -1 = -8) for a score of 6.
+    /// NB: if the jump score is set to -11, then the alignment would jump back in x (3bp), to give
+    /// 17 matches (+17) and one jump (-11) for a score of 6, which is equal to 14 matches (+14)
+    /// and a 3bp deletion (-5 - 1 - 1 -1 = -8) for a score of 6.  We prefer the jump in this case.
     #[rstest]
-    fn test_left_justify_deletion_in_triplet_with_leading_matches() {
+    fn test_jump_over_deletion() {
         let x = s("TTT---GACGACGACGA");
         let y = s("TTTGACGACGACGACGA");
         let mut aligner = SingleStrandAligner::default();
@@ -1076,26 +1215,39 @@ pub mod tests {
             14,
             0,
             17,
-            14 - (5 + 1) - 1 - 1,
+            17 - 11,
             &[
-                Match, Match, Match, Del, Del, Del, Match, Match, Match, Match, Match, Match,
-                Match, Match, Match, Match, Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Xskip(11),
+                Match,
+                Match,
+                Match,
             ],
         );
     }
 
-    /// NB: if the jump score is set to -10, then the alignment would jump back in x (3bp), to give
-    /// 17 matches (+17) and one jump (-10) for a score of 7, which is greater than 14 matches (+14)
+    /// NB: if the jump score is set to -12, then the alignment would jump back in x (3bp), to give
+    /// 17 matches (+17) and one jump (-12) for a score of 5, which is less than 14 matches (+14)
     /// and a 3bp deletion (-5 - 1 - 1 -1 = -8) for a score of 6.
     #[rstest]
-    fn test_x_jump_in_triplet_with_leading_matches() {
-        //    [0 .. 5]  [3 ...... 13]
-        // x: [TTTGAC]  [GACGACGACGA]
-        // y:  TTTGAC => GACGACGACGA
-        let x = s("TTTGAC___GACGACGA");
+    fn test_deletion_over_jump() {
+        let x = s("TTT---GACGACGACGA");
         let y = s("TTTGACGACGACGACGA");
         let mut aligner = SingleStrandAligner::default();
-        aligner.scoring.jump_score = -10;
+        aligner.scoring.jump_score = -12;
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -1103,26 +1255,10 @@ pub mod tests {
             14,
             0,
             17,
-            17 - 10,
+            14 - (5 + 1) - 1 - 1,
             &[
-                Match,
-                Match,
-                Match,
-                Match,
-                Match,
-                Match,
-                Xskip(3),
-                Match,
-                Match,
-                Match,
-                Match,
-                Match,
-                Match,
-                Match,
-                Match,
-                Match,
-                Match,
-                Match,
+                Match, Match, Match, Del, Del, Del, Match, Match, Match, Match, Match, Match,
+                Match, Match, Match, Match, Match,
             ],
         );
     }
@@ -1423,13 +1559,13 @@ pub mod tests {
 
     #[rstest]
     fn test_local_prefer_match_over_indel() {
-        let x = s("  CGCGCGCG   ");
-        //                    ||||
+        let x = s("     CGCGCGCG");
+        //                         ||||
         let y = s("AACGCGACGCGTT");
         let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
         aligner.scoring.gap_open = -3;
         let alignment = aligner.local(&x, &y);
-        assert_alignment(&alignment, 0, 4, 2, 6, 4, &[Match; 4]);
+        assert_alignment(&alignment, 2, 6, 7, 11, 4, &[Match; 4]);
     }
 
     #[rstest]
@@ -1559,22 +1695,204 @@ pub mod tests {
 
     #[rstest]
     fn test_local_sir_jump_a_lot() {
-        //    [0 ...... 10] [21 .... 30] [11 .... 20] [31 .... 41]
-        // x: [AAAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG] [TTTTTTTTTTT]
-        // y:  AAAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG==>TTTTTTTTTTT
-        //    [0 ...... 10] [11 .... 20] [21 .... 30] [31 .... 41]
-        let x = s("AAAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTTTT");
-        let y = s("AAAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTTT");
-        let mut aligner = SingleStrandAligner::default();
+        // NB: prefer longer alignments with jumps versus shorter alignments with fewer/no jumps
+        // when the score is tied
+        //    [0 ...... 9] [20 .... 29] [10 .... 19] [30 .... 39]
+        // x: [AAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG] [TTTTTTTTTT]
+        // y:  AAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG==>TTTTTTTTTT
+        //    [0 ...... 9] [10 .... 19] [20 .... 29] [30 .... 39]
+        let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTTT");
+        let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTT");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
         let alignment = aligner.local(&x, &y);
         let mut operations: Vec<AlignmentOperation> = Vec::new();
-        operations.extend(&[Match; 11]);
-        operations.push(Xskip(21));
         operations.extend(&[Match; 10]);
-        operations.push(Xskip(11));
+        operations.push(Xskip(20));
         operations.extend(&[Match; 10]);
-        operations.push(Xskip(31));
-        operations.extend(&[Match; 11]);
-        assert_alignment(&alignment, 0, 42, 0, 42, 42 - 10 - 10 - 10, &operations);
+        operations.push(Xskip(10));
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(30));
+        operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 0, 40, 0, 40, 40 - 10 - 10 - 10, &operations);
     }
+
+    #[rstest]
+    fn test_local_prefer_suffix_clip_to_last_jump() {
+        // NB: only 9 Cs match at the start of x and end of y, so not enough matches to jump after
+        // matching the 10 As at the end of x and start of y
+        //    [9 ..... 18]
+        // x: [AAAAAAAAAA
+        // y:  AAAAAAAAAA
+        //    [0 ...... 9]
+        let x = s("CCCCCCCCCAAAAAAAAAA");
+        let y = s("AAAAAAAAAACCCCCCCCC");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 9, 19, 0, 10, 10, &operations);
+    }
+
+    #[rstest]
+    fn test_local_prefer_last_jump_to_suffix_clip() {
+        // NB: 10 Cs match at the start of x and end of y, so enough matches to jump after
+        // matching the 10 As at the end of x and start of y.
+        //    [9 ..... 18] [0 ...... 9]
+        // x: [AAAAAAAAAA] [CCCCCCCCCC]
+        // y:  AAAAAAAAAA==>CCCCCCCCCC
+        //    [0 ...... 9] [10 .... 19]
+        let x = s("CCCCCCCCCCAAAAAAAAAA");
+        let y = s("AAAAAAAAAACCCCCCCCCC");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(0));
+        operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 10, 10, 0, 20, 20 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_local_prefer_prefix_clip_to_last_jump() {
+        // NB: only 9 Cs match at the end of x and start of y, so not enough matches to jump after
+        // matching the 10 As at the start of x and end of x.
+        //    [0 ...... 9]
+        // x: [AAAAAAAAAA
+        // y:  AAAAAAAAAA
+        //    [9 ...... 18]
+        let x = s("AAAAAAAAAACCCCCCCCC");
+        let y = s("CCCCCCCCCAAAAAAAAAA");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 0, 10, 9, 19, 10, &operations);
+    }
+
+    #[rstest]
+    fn test_local_prefer_last_jump_to_prefix_clip() {
+        // NB: 10 Cs match at the end of x and start of y, so enough matches to jump after
+        // matching the 10 As at the start of x and end of x.
+        //    [10 .... 19] [0 ...... 9]
+        // x: [CCCCCCCCCC] [AAAAAAAAAA]
+        // y:  CCCCCCCCCC==>AAAAAAAAAA
+        //    [0 ...... 9] [10 .... 19]
+        let x = s("AAAAAAAAAACCCCCCCCCC");
+        let y = s("CCCCCCCCCCAAAAAAAAAA");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(0));
+        operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 10, 10, 0, 20, 20 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_local_double_jump_with_trailing_y() {
+        //    [0 ...... 9] [20 .... 29] [10 .... 19]
+        // x: [AAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG] ----------
+        // y:  AAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG  TTTTTTTTTT
+        //    [0 ...... 9] [10 .... 19] [20 .... 29]
+        let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCC");
+        let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTT");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(20));
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(10));
+        operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 0, 20, 0, 30, 30 - 10 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_local_double_jump_with_leding_y() {
+        //               [0 ...... 9] [20 .... 29] [10 .... 19]
+        // x:  ----------[AAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG]
+        // y: TTTTTTTTTT  AAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG
+        //               [10 .... 19] [20 .... 29] [30 .... 39]
+        let x = s("          AAAAAAAAAAGGGGGGGGGGCCCCCCCCCC");
+        let y = s("TTTTTTTTTTAAAAAAAAAACCCCCCCCCCGGGGGGGGGG");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(20));
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(10));
+        operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 0, 20, 10, 40, 30 - 10 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_global_start_with_jump() {
+        let x = s("TTTTTTTTTTAAAAAAAAAA");
+        let y = s("          AAAAAAAAAA");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.push(Xskip(10));
+        operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 0, 20, 0, 10, 10 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_global_end_with_jump() {
+        let x = s("AAAAAAAAAATTTTTTTTTT");
+        let y = s("AAAAAAAAAA");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(10));
+        assert_alignment(&alignment, 0, 20, 0, 10, 10 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_global_start_and_end_with_jump() {
+        let x = s("TTTTTTTTTTAAAAAAAAAATTTTTTTTTT");
+        let y = s("          AAAAAAAAAA");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.push(Xskip(10));
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(20));
+        assert_alignment(&alignment, 0, 30, 0, 10, 10 - 10 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_local_jump_with_x_and_y_suffix_clips() {
+        // want:
+        // - last 9bp of x are clipped, so go from (39, 39) to (30, 39)
+        // - last 9bp of y are clipped, so go from (30, 39) to (30, 30)
+        // - jump from (30, 30) to (19, 29)    ******** FIXME ********
+        // - matches from (19, 29) to (10, 20)
+        // - jump from (10, 20) to (29, 19)
+        // - matches from (29, 19) to (20, 10)
+        // - jump from (20, 10) to (9, 9)
+        // - matches from (9, 9) to (0, 0)
+        // issue is that suffix clipping can't immediately jump to somewhere in x
+        // - (30, 39) to (30, 30) via y suffix clipping and then immediately jump to (19, 30)
+        //   - so when you y-suffix clip j bases, you call also jump anywhere in x
+
+        //    [0 ...... 9] [20 .... 29] [10 .... 19]
+        // x: [AAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG]          TTTTTTTTT
+        // y:  AAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG TTTTTTTTT
+        //    [0 ...... 9] [10 .... 19] [20 .... 29]
+        let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTT");
+        let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTT");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(20));
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(10));
+        operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 0, 20, 0, 30, 30 - 10 - 10, &operations);
+    }
+    // TODO: no leading jumps
 }

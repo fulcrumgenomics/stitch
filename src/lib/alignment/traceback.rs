@@ -33,17 +33,18 @@ pub const I_FLIP: u8 = 13;
 
 // Traceback moves
 pub const TB_START: u16 = 0b0000;
-pub const TB_INS: u16 = 0b0001;
-pub const TB_DEL: u16 = 0b0010;
-pub const TB_SUBST: u16 = 0b0011;
-pub const TB_MATCH: u16 = 0b0100;
+pub const TB_INS: u16 = 0b0001; // 1
+pub const TB_DEL: u16 = 0b0010; // 2
+pub const TB_SUBST: u16 = 0b0011; // 3
+pub const TB_MATCH: u16 = 0b0100; // 4
 
-pub const TB_XCLIP_PREFIX: u16 = 0b0101; // prefix clip of x
-pub const TB_XCLIP_SUFFIX: u16 = 0b0110; // suffix clip of x
-pub const TB_YCLIP_PREFIX: u16 = 0b0111; // prefix clip of y
-pub const TB_YCLIP_SUFFIX: u16 = 0b1000; // suffix clip of y
+pub const TB_XCLIP_PREFIX: u16 = 0b0101; // prefix clip of x (5)
+pub const TB_XCLIP_SUFFIX: u16 = 0b0110; // suffix clip of x (6)
+pub const TB_YCLIP_PREFIX: u16 = 0b0111; // prefix clip of y (7)
+pub const TB_YCLIP_SUFFIX: u16 = 0b1000; // suffix clip of y (8)
+pub const TB_XJUMP: u16 = 0b1001; // jump (9)
 
-pub const TB_MAX: u16 = 0b1000; // Useful in checking that the
+pub const TB_MAX: u16 = 0b1001; // Useful in checking that the
                                 // TB value we got is a valid one
 
 impl TracebackCell {

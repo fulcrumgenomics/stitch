@@ -58,26 +58,26 @@ impl XBuffer {
     pub fn fill<F: MatchFunc>(
         &mut self,
         m: usize,
-        prev: usize,
+        j: usize,
         S: &[Vec<i32>; 2],
         scoring: &Scoring<F>,
     ) {
         // The current base in `y` is fixed (i.e. index `j`), but we can move from anywhere in `x`.
         // For a given `i`, we want to find jump from `k` that yields the maximum score.
         // We can compute this in two passes:
-        // 1. suffix_score[k] = max(suffix_score[k + 1], S[prev][k] + jump_penalty)
-        // 2. prefix_score[k] = max(prefix_score[k - 1], S[prev][k] + jump_penalty)
-        // Then score[k] = max(prefix_score[k], suffix_score[k]).  This can be computer at the
+        // 1. suffix_score[k] = max(suffix_score[k + 1], S[j][k] + jump_penalty)
+        // 2. prefix_score[k] = max(prefix_score[k - 1], S[j][k] + jump_penalty)
+        // Then score[k] = max(prefix_score[k], suffix_score[k]).  This can be computed at the
         // same time as prefix_score[k].
 
         // The first pass to compute for each k:
         //   suffix_score[k] = max(suffix_score[k + 1], S[prev][k] + jump_penalty)
         // base case
-        self.score[m] = S[prev][m] + scoring.jump_score;
+        self.score[m] = S[j][m] + scoring.jump_score;
         self.from[m] = m as u32;
         // iterate over k in descending order
         for k in (0..m).rev() {
-            let k_score = S[prev][k] + scoring.jump_score;
+            let k_score = S[j][k] + scoring.jump_score;
             if self.score[k + 1] >= k_score {
                 self.score[k] = self.score[k + 1];
                 self.from[k] = self.from[k + 1];
@@ -92,12 +92,12 @@ impl XBuffer {
         // and then
         //   score[k] = max(prefix_score[k], suffix_score[k])
         // base case
-        let mut prev_prefix_score = S[prev][0] + scoring.jump_score;
+        let mut prev_prefix_score = S[j][0] + scoring.jump_score;
         let mut prev_prefix_from = 0u32;
         // iterate over k in ascending order
         for k in 1..=m {
             // compute prefix_score[k]
-            let cur_prefix_score = S[prev][k] + scoring.jump_score;
+            let cur_prefix_score = S[j][k] + scoring.jump_score;
             if cur_prefix_score >= prev_prefix_score {
                 prev_prefix_score = cur_prefix_score;
                 prev_prefix_from = k as u32;
@@ -106,6 +106,7 @@ impl XBuffer {
             if prev_prefix_score >= self.score[k] {
                 self.score[k] = prev_prefix_score;
                 self.from[k] = prev_prefix_from;
+                assert!(self.from[k] != k as u32); // TODO: can self.from[k] == k
             }
         }
     }
