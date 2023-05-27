@@ -14,6 +14,7 @@ path = "src/main.rs"
 name = "fqcv_lib"
 path = "src/lib/mod.rs"
 
+
 [dependencies]
 anyhow = "1.0.71"
 bio = "1.1.0"
@@ -38,3 +39,7 @@ built = { version = "0.6.0", features = ["git2"] }
 
 [profile.release]
 debug = true
+
+[dev-dependencies]
+rstest = "0.17.0"
+tempfile = "3.5"

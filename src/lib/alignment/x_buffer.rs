@@ -5,7 +5,6 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::cmp::max;
 use std::i32;
 use std::iter::repeat;
 
@@ -40,9 +39,9 @@ impl XBuffer {
     pub fn set(&mut self, i: usize, score: i32, from: u32, flip_strand: bool) {
         self.score[i] = score;
         if flip_strand {
-            self.from[i] = from;
+            self.from[i] = from + (1 << 31);
         } else {
-            self.from[i] = from + 0xFFFF_FFFF;
+            self.from[i] = from;
         }
     }
 
@@ -51,7 +50,7 @@ impl XBuffer {
         (
             self.score[i],
             self.from[i] << 1 >> 1,
-            (self.from[i] >> 31) == 0,
+            (self.from[i] >> 31) == 1,
         )
     }
 
@@ -63,39 +62,49 @@ impl XBuffer {
         S: &[Vec<i32>; 2],
         scoring: &Scoring<F>,
     ) {
-        // NB: do not jump from the first/last `i`
-        self.score[m] = MIN_SCORE;
+        // The current base in `y` is fixed (i.e. index `j`), but we can move from anywhere in `x`.
+        // For a given `i`, we want to find the `k` that yields the maximum score.
+        // We can compute this in two passes:
+        // 1. suffix_score[k] = max(suffix_score[k + 1], S[prev][k] + jump_penalty)
+        // 2. prefix_score[k] = max(prefix_score[k - 1], S[prev][k] + jump_penalty)
+        // Then score[k] = max(prefix_score[k], suffix_score[k]).  This can be computer at the
+        // same time as prefix_score[k].
+
+        // The first pass to compute for each k:
+        //   suffix_score[k] = max(suffix_score[k + 1], S[prev][k] + jump_penalty)
+        // base case
+        self.score[m] = S[prev][m] + scoring.jump_score;
         self.from[m] = m as u32;
-        for i in (1..m).rev() {
-            if self.score[i + 1] >= S[prev][i] {
-                self.score[i] = self.score[i + 1];
-                self.from[i] = self.from[i + 1];
+        // iterate over k in descending order
+        for k in (0..m).rev() {
+            let k_score = S[prev][k] + scoring.jump_score;
+            if self.score[k + 1] >= k_score {
+                self.score[k] = self.score[k + 1];
+                self.from[k] = self.from[k + 1];
             } else {
-                self.score[i] = S[prev][i];
-                self.from[i] = i as u32;
+                self.score[k] = k_score;
+                self.from[k] = k as u32;
             };
         }
-        self.score[0] = MIN_SCORE;
 
-        let mut earlier_jump_score = MIN_SCORE;
-        let mut earlier_jump_length = 0u32;
-        self.score[0] += scoring.jump_score;
-        for i in 1..=m {
-            if 2 <= i {
-                let score = S[prev][i - 2] + scoring.jump_score;
-                if score >= earlier_jump_score {
-                    earlier_jump_score = score;
-                    earlier_jump_length = (i - 2) as u32;
-                }
+        // The second pass to compute for each k:
+        //   prefix_score[k] = max(prefix_score[k - 1], S[prev][k] + jump_penalty)
+        // and then
+        //   score[k] = max(prefix_score[k], suffix_score[k])
+        // base case
+        let mut prev_prefix_score = S[prev][0] + scoring.jump_score;
+        let mut prev_prefix_from = 0u32;
+        for k in 1..=m {
+            // compute prefix_score[k]
+            let cur_prefix_score = S[prev][k] + scoring.jump_score;
+            if cur_prefix_score >= prev_prefix_score {
+                prev_prefix_score = cur_prefix_score;
+                prev_prefix_from = k as u32;
             }
-
-            let later_jump_score = self.score[i] + scoring.jump_score;
-            let diagonal_score = S[prev][i - 1];
-            self.score[i] = max(earlier_jump_score, max(diagonal_score, later_jump_score));
-            if diagonal_score == self.score[i] {
-                self.from[i] = (i - 1) as u32;
-            } else if earlier_jump_score == self.score[i] {
-                self.from[i] = earlier_jump_length;
+            // score[k] = max(prefix_score[k], suffix_score[k])
+            if prev_prefix_score >= self.score[k] {
+                self.score[k] = prev_prefix_score;
+                self.from[k] = prev_prefix_from;
             }
         }
     }

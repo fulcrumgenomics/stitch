@@ -211,7 +211,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
             } else {
                 &self.reverse
             };
-            let next_layer: u32;
+            let next_layer: u16;
             match last_layer {
                 TB_START => break,
                 TB_INS => {
@@ -230,17 +230,18 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
                     } else {
                         operations.push(AlignmentOperation::Subst);
                     }
-                    let from_flip_strand = cur_aligner.traceback.get(i, j).get_x_bits() == 1;
-
-                    let from_i = cur_aligner.traceback.get(i, j).get_l_bits() as usize;
-                    if from_flip_strand {
-                        operations.push(AlignmentOperation::Xflip(i - from_i));
-                        cur_is_forward = !cur_is_forward;
-                    } else if from_i != i - 1 {
-                        operations.push(AlignmentOperation::Xskip(i - from_i));
+                    let s_from = cur_aligner.traceback.get(i, j).get_s_from() as usize;
+                    let s_flip_strand = cur_aligner.traceback.get(i, j).get_s_flip_strand();
+                    if s_from != i - 1 {
+                        if s_flip_strand {
+                            operations.push(AlignmentOperation::Xflip(s_from));
+                            cur_is_forward = !cur_is_forward;
+                        } else {
+                            operations.push(AlignmentOperation::Xskip(s_from));
+                        }
                     }
-                    next_layer = cur_aligner.traceback.get(from_i, j - 1).get_s_bits();
-                    i = from_i;
+                    next_layer = cur_aligner.traceback.get(s_from, j - 1).get_s_bits();
+                    i = s_from;
                     j -= 1;
                 }
                 TB_XCLIP_PREFIX => {
@@ -288,24 +289,15 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     }
 
     fn fill_x_buffer_stranded(&mut self, m: usize) {
-        for i in 1..=m {
+        for i in 0..=m {
             let (fwd_score, fwd_from, fwd_strand) = self.forward.x_buffer.get(i);
             let (rev_score, rev_from, rev_strand) = self.reverse.x_buffer.get(i);
             assert!(!fwd_strand, "Bug: fwd strand");
             assert!(!rev_strand, "Bug: rev strand");
-
-            let fwd_to_rev_score = fwd_score + self.forward.scoring.jump_score;
-            let rev_to_fwd_score = rev_score + self.reverse.scoring.jump_score;
-
-            if fwd_score < rev_to_fwd_score {
-                self.forward
-                    .x_buffer
-                    .set(i, rev_to_fwd_score, rev_from, true);
-            }
-            if rev_score < fwd_to_rev_score {
-                self.reverse
-                    .x_buffer
-                    .set(i, fwd_to_rev_score, fwd_from, true);
+            if fwd_score < rev_score {
+                self.forward.x_buffer.set(i, rev_score, rev_from, true);
+            } else {
+                self.reverse.x_buffer.set(i, fwd_score, fwd_from, true);
             }
         }
     }
@@ -428,14 +420,14 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         ];
 
         // Temporarily Over-write the clip penalties
-        self.forward.scoring.xclip_prefix = 0;
-        self.forward.scoring.xclip_suffix = 0;
-        self.forward.scoring.yclip_prefix = MIN_SCORE;
-        self.forward.scoring.yclip_suffix = MIN_SCORE;
-        self.reverse.scoring.xclip_prefix = 0;
-        self.reverse.scoring.xclip_suffix = 0;
-        self.reverse.scoring.yclip_prefix = MIN_SCORE;
-        self.reverse.scoring.yclip_suffix = MIN_SCORE;
+        self.forward.scoring.xclip_prefix = MIN_SCORE;
+        self.forward.scoring.xclip_suffix = MIN_SCORE;
+        self.forward.scoring.yclip_prefix = 0;
+        self.forward.scoring.yclip_suffix = 0;
+        self.reverse.scoring.xclip_prefix = MIN_SCORE;
+        self.reverse.scoring.xclip_suffix = MIN_SCORE;
+        self.reverse.scoring.yclip_prefix = 0;
+        self.reverse.scoring.yclip_suffix = 0;
 
         // Compute the alignment
         let mut alignment = self.custom(x_forward, x_revcomp, y);

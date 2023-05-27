@@ -12,6 +12,7 @@ use std::iter::repeat;
 use crate::alignment::constants::AlignmentMode;
 use crate::alignment::scoring::Scoring;
 use bio::alignment::pairwise::MatchFunc;
+use bio::alignment::pairwise::MatchParams;
 use bio::utils::TextSlice;
 
 use crate::alignment::constants::AlignmentOperation;
@@ -89,8 +90,16 @@ pub struct SingleStrandAligner<F: MatchFunc> {
     pub x_buffer: XBuffer,
 }
 
+impl Default for SingleStrandAligner<MatchParams> {
+    fn default() -> Self {
+        let match_fn = MatchParams::new(1, -1);
+        SingleStrandAligner::new(-5, -1, -10, match_fn)
+    }
+}
+
 impl<F: MatchFunc> SingleStrandAligner<F> {
     pub fn init_matrices(&mut self, m: usize, n: usize) {
+        // initialize the traceback
         self.traceback.init(m, n);
 
         // Set the initial conditions
@@ -109,8 +118,10 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             if k == 0 {
                 let mut tb = TracebackCell::new();
                 tb.set_all(TB_START);
-                tb.set_x_bits(0);
-                tb.set_l_bits(0);
+                tb.set_s_flip_strand(false);
+                tb.set_i_flip_strand(false);
+                tb.set_s_from(0);
+                tb.set_i_from(0);
                 self.traceback.set(0, 0, tb);
                 self.Lx.clear();
                 self.Lx.extend(repeat(0usize).take(n + 1));
@@ -125,11 +136,14 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             for i in 1..=m {
                 let mut tb = TracebackCell::new();
                 tb.set_all(TB_START);
-                tb.set_x_bits(0);
-                tb.set_l_bits(0);
+                tb.set_s_flip_strand(false);
+                tb.set_i_flip_strand(false);
+                tb.set_s_from(0);
+                tb.set_i_from(0);
                 if i == 1 {
                     self.I[k][i] = self.scoring.gap_open + self.scoring.gap_extend;
                     tb.set_i_bits(TB_START);
+                    tb.set_i_from((i - 1) as u32);
                 } else {
                     // Insert all i characters
                     let i_score = self.scoring.gap_open + self.scoring.gap_extend * (i as i32);
@@ -138,9 +152,11 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                     if i_score > c_score {
                         self.I[k][i] = i_score;
                         tb.set_i_bits(TB_INS);
+                        tb.set_i_from((i - 1) as u32);
                     } else {
                         self.I[k][i] = c_score;
                         tb.set_i_bits(TB_XCLIP_PREFIX);
+                        tb.set_i_from((i - 1) as u32);
                     }
                 }
 
@@ -181,6 +197,10 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     pub fn init_column(&mut self, j: usize, curr: usize, m: usize, n: usize) {
         // Handle i = 0 case
         let mut tb = TracebackCell::new();
+        tb.set_s_flip_strand(false);
+        tb.set_i_flip_strand(false);
+        tb.set_s_from(0);
+        tb.set_i_from(0);
         self.I[curr][0] = MIN_SCORE;
 
         if j == 1 {
@@ -244,19 +264,36 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             let p: u8 = x[i - 1];
             let mut tb = TracebackCell::new();
 
-            let addend = self.scoring.match_fn.score(p, q);
-            let (x_buffer_score, m_score_from_i, m_score_flip_strand) = self.x_buffer.get(i);
-            let m_score: i32 = x_buffer_score + addend;
+            // Align the x[i-1] with y[j-1], either through a jump or a diagonal move.
+            let (x_jump_score, x_jump_from, x_jump_flip_strand) = self.x_buffer.get(i);
+            let diag_score = self.S[prev][i - 1];
+            let (m_score, m_from, m_flip_strand) = {
+                let addend = self.scoring.match_fn.score(p, q);
+                if diag_score >= x_jump_score {
+                    (diag_score + addend, (i - 1) as u32, false)
+                } else {
+                    (x_jump_score + addend, x_jump_from, x_jump_flip_strand)
+                }
+            };
 
+            // Align an insertion, either through moving from the previous base in x (gap open or
+            // extend), or through a jump (gap open).
             let i_score = self.I[curr][i - 1] + self.scoring.gap_extend;
             let s_score = self.S[curr][i - 1] + self.scoring.gap_open + self.scoring.gap_extend;
-            let best_i_score;
-            if i_score > s_score {
-                best_i_score = i_score;
+            let j_score = x_jump_score + self.scoring.gap_open + self.scoring.gap_extend;
+            let best_i_score = max(i_score, max(s_score, j_score));
+            if i_score == best_i_score {
                 tb.set_i_bits(TB_INS);
-            } else {
-                best_i_score = s_score;
+                tb.set_i_flip_strand(false);
+                tb.set_i_from((i - 1) as u32);
+            } else if s_score == best_i_score {
                 tb.set_i_bits(self.traceback.get(i - 1, j).get_s_bits());
+                tb.set_i_flip_strand(false);
+                tb.set_i_from((i - 1) as u32);
+            } else {
+                tb.set_i_bits(self.traceback.get(x_jump_from as usize, j).get_s_bits());
+                tb.set_i_flip_strand(x_jump_flip_strand);
+                tb.set_i_from(x_jump_from);
             }
 
             let d_score = self.D[prev][i] + self.scoring.gap_extend;
@@ -276,18 +313,18 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             if m_score > best_s_score {
                 best_s_score = m_score;
                 tb.set_s_bits(if p == q { TB_MATCH } else { TB_SUBST });
-                tb.set_x_bits(u32::from(m_score_flip_strand));
-                tb.set_l_bits(m_score_from_i);
-            }
-
-            if best_i_score > best_s_score {
-                best_s_score = best_i_score;
-                tb.set_s_bits(TB_INS);
+                tb.set_s_flip_strand(m_flip_strand);
+                tb.set_s_from(m_from);
             }
 
             if best_d_score > best_s_score {
                 best_s_score = best_d_score;
                 tb.set_s_bits(TB_DEL);
+            }
+
+            if best_i_score > best_s_score {
+                best_s_score = best_i_score;
+                tb.set_s_bits(TB_INS);
             }
 
             if xclip_score > best_s_score {
@@ -484,13 +521,24 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
         let mut last_layer = self.traceback.get(i, j).get_s_bits();
         loop {
-            let next_layer: u32;
+            let next_layer: u16;
             match last_layer {
                 TB_START => break,
                 TB_INS => {
                     operations.push(AlignmentOperation::Ins);
-                    next_layer = self.traceback.get(i, j).get_i_bits();
-                    i -= 1;
+                    let i_from = self.traceback.get(i, j).get_i_from() as usize;
+                    let i_flip_strand = self.traceback.get(i, j).get_i_flip_strand();
+                    if i_from == i - 1 {
+                        next_layer = self.traceback.get(i, j).get_i_bits();
+                    } else {
+                        if i_flip_strand {
+                            operations.push(AlignmentOperation::Xflip(i_from));
+                        } else {
+                            operations.push(AlignmentOperation::Xskip(i_from));
+                        }
+                        next_layer = self.traceback.get(i_from, j).get_i_bits();
+                    }
+                    i = i_from;
                 }
                 TB_DEL => {
                     operations.push(AlignmentOperation::Del);
@@ -503,14 +551,16 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                     } else {
                         operations.push(AlignmentOperation::Subst);
                     }
-                    let from_flip_strand = self.traceback.get(i, j).get_x_bits() == 1;
-                    assert!(!from_flip_strand, "Bug: flip in single-strand");
-                    let from_i = self.traceback.get(i, j).get_l_bits() as usize;
-                    if from_i != i - 1 {
-                        operations.push(AlignmentOperation::Xskip(from_i));
+                    let s_from = self.traceback.get(i, j).get_s_from() as usize;
+                    let s_flip_strand = self.traceback.get(i, j).get_s_flip_strand();
+                    assert!(!s_flip_strand);
+                    if s_from == i - 1 {
+                        next_layer = self.traceback.get(i - 1, j - 1).get_s_bits();
+                    } else {
+                        operations.push(AlignmentOperation::Xskip(s_from));
+                        next_layer = self.traceback.get(s_from, j - 1).get_s_bits();
                     }
-                    next_layer = self.traceback.get(from_i, j - 1).get_s_bits();
-                    i = from_i;
+                    i = s_from;
                     j -= 1;
                 }
                 TB_XCLIP_PREFIX => {
@@ -565,7 +615,6 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     /// * `y` - Textslice
     pub fn custom(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
         let (m, n) = (x.len(), y.len());
-        self.traceback.init(m, n);
 
         self.init_matrices(m, n);
 
@@ -628,25 +677,20 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         ];
 
         // Temporarily Over-write the clip penalties
-        self.scoring.xclip_prefix = 0;
-        self.scoring.xclip_suffix = 0;
-        self.scoring.yclip_prefix = MIN_SCORE;
-        self.scoring.yclip_suffix = MIN_SCORE;
+        self.scoring.xclip_prefix = MIN_SCORE;
+        self.scoring.xclip_suffix = MIN_SCORE;
+        self.scoring.yclip_prefix = 0;
+        self.scoring.yclip_suffix = 0;
 
         // Compute the alignment
         let mut alignment = self.custom(x, y);
         alignment.mode = AlignmentMode::Semiglobal;
 
-        // Filter out Xclip and Yclip from alignment.operations
+        // Filter out Yclip from alignment.operations
         {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xskip};
+            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xskip};
             alignment.operations.retain(|x| {
-                *x == Match
-                    || *x == Subst
-                    || *x == Ins
-                    || *x == Del
-                    || matches!(*x, Xclip(_))
-                    || matches!(*x, Xskip(_))
+                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xskip(_))
             });
         }
 
@@ -681,14 +725,9 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
         // Filter out Xclip and Yclip from alignment.operations
         {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xskip};
+            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xskip};
             alignment.operations.retain(|x| {
-                *x == Match
-                    || *x == Subst
-                    || *x == Ins
-                    || *x == Del
-                    || matches!(*x, Xclip(_))
-                    || matches!(*x, Xskip(_))
+                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xskip(_))
             });
         }
 
@@ -699,5 +738,738 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         self.scoring.yclip_suffix = clip_penalties[3];
 
         alignment
+    }
+}
+
+// Tests
+#[cfg(test)]
+pub mod tests {
+    use bio::alignment::pairwise::{MatchFunc, MatchParams};
+    use itertools::Itertools;
+    use rstest::rstest;
+
+    use crate::alignment::constants::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xskip};
+    use crate::alignment::{constants::AlignmentOperation, pairwise::PairwiseAlignment};
+
+    use super::SingleStrandAligner;
+
+    /// Upper-cases and remove display-related characters from a string.
+    fn s(bases: &str) -> Vec<u8> {
+        bases
+            .chars()
+            .filter(|base| *base != '-' && *base != ' ' && *base != '_')
+            .map(|base| base.to_ascii_uppercase() as u8)
+            .collect_vec()
+    }
+
+    fn assert_alignment(
+        alignment: &PairwiseAlignment,
+        xstart: usize,
+        xend: usize,
+        ystart: usize,
+        yend: usize,
+        score: i32,
+        operations: &[AlignmentOperation],
+    ) {
+        assert_eq!(alignment.xstart, xstart, "xstart {alignment:?}");
+        assert_eq!(alignment.xend, xend, "xend {alignment:?}");
+        assert_eq!(alignment.ystart, ystart, "ystart {alignment:?}");
+        assert_eq!(alignment.yend, yend, "yend {alignment:?}");
+        assert_eq!(alignment.score, score, "score {alignment:?}");
+        assert_eq!(alignment.operations, operations, "operations {alignment:?}");
+    }
+
+    /// Identical sequences, all matches
+    #[rstest]
+    fn test_identical() {
+        let x = s("ACGTAACC");
+        let y = s("ACGTAACC");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(&alignment, 0, 8, 0, 8, 8, &[Match; 8]);
+    }
+
+    /// Identical sequences, except one mismatch
+    #[rstest]
+    fn test_single_mismatch() {
+        let x = s("AACCGGTT");
+        let y = s("AACCGtTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            8,
+            0,
+            8,
+            7 - 1,
+            &[Match, Match, Match, Match, Match, Subst, Match, Match],
+        );
+    }
+
+    /// Identical sequences, except one samll deletion
+    #[rstest]
+    fn test_small_deletion() {
+        let x = s("AACC-GTT");
+        let y = s("AACCGGTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            7,
+            0,
+            8,
+            7 - (5 + 1),
+            &[Match, Match, Match, Match, Del, Match, Match, Match],
+        );
+    }
+
+    /// Identical sequences, except one samll insertion
+    #[rstest]
+    fn test_small_insertion() {
+        let x = s("AACCGGTT");
+        let y = s("AACC-GTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            8,
+            0,
+            7,
+            7 - (5 + 1),
+            &[Match, Match, Match, Match, Ins, Match, Match, Match],
+        );
+    }
+
+    /// Two sequences with compensating insertions and deletions
+    #[rstest]
+    fn test_compensating_insertion_and_deletion() {
+        let x = s("AAACGCGCGCGCG-TT");
+        let y = s("-AACGCGCGCGCGTTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            15,
+            0,
+            15,
+            14 - (5 + 1) - (5 + 1),
+            &[
+                Ins, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match,
+                Match, Del, Match, Match,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_leading_insertion() {
+        let x = s("ATTTTTTTTTTT");
+        let y = s("-TTTTTTTTTTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            12,
+            0,
+            11,
+            11 - (5 + 1),
+            &[
+                Ins, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_trailing_insertion() {
+        let x = s("TTTTTTTTTTTA");
+        let y = s("TTTTTTTTTTT-");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            12,
+            0,
+            11,
+            11 - (5 + 1),
+            &[
+                Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Ins,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_leading_deletion() {
+        let x = s("-TTTTTTTTTTT");
+        let y = s("ATTTTTTTTTTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            11,
+            0,
+            12,
+            11 - (5 + 1),
+            &[
+                Del, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_trailing_deletion() {
+        let x = s("TTTTTTTTTTT-");
+        let y = s("TTTTTTTTTTTA");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            11,
+            0,
+            12,
+            11 - (5 + 1),
+            &[
+                Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Del,
+            ],
+        );
+    }
+
+    /// Align two sequences preferring a 2bp insertion and mismatch vs two small insertions"
+    #[rstest]
+    fn test_prefer_2bp_insertion_and_mismatch_vs_two_small_insertions() {
+        let x = s("ATTTTTTTTTTTA");
+        let y = s("--TTTTTTTTTTt");
+        let match_fn = MatchParams::new(1, -1);
+        let mut aligner = SingleStrandAligner::new(-3, -1, -10, match_fn);
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            13,
+            0,
+            11,
+            10 - (3 + 1) - 1 - 1,
+            &[
+                Ins, Ins, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match,
+                Subst,
+            ],
+        );
+    }
+
+    /// Align two sequences preferring a 2bp insertion and mismatch vs two small insertions"
+    #[rstest]
+    fn test_prefer_two_small_insertions_vs_2bp_insertion_and_mismatch() {
+        let x = s("ATTTTTTTTTTTA");
+        let y = s("-TTTTTTTTTTT-");
+        let match_fn = MatchParams::new(1, -3);
+        let mut aligner = SingleStrandAligner::new(-3, -1, -10, match_fn);
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            13,
+            0,
+            11,
+            11 - (3 + 1) - (3 + 1),
+            &[
+                Ins, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match,
+                Ins,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_left_justify_insertion_in_homopolymer() {
+        let x = s("GTTTTTTTTTTA");
+        let y = s("G-TTTTTTTTTA");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            12,
+            0,
+            11,
+            11 - (5 + 1),
+            &[
+                Match, Ins, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_left_justify_insertion_in_triplet() {
+        let x = s("GACGACGACGACGA");
+        let y = s("---GACGACGACGA");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            14,
+            0,
+            11,
+            11 - (5 + 1) - 1 - 1,
+            &[
+                Ins, Ins, Ins, Match, Match, Match, Match, Match, Match, Match, Match, Match,
+                Match, Match,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_left_justify_insertion_in_triplet_with_leading_matches() {
+        let x = s("TTTGACGACGACGACGA");
+        let y = s("TTT---GACGACGACGA");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            17,
+            0,
+            14,
+            14 - (5 + 1) - 1 - 1,
+            &[
+                Match, Match, Match, Ins, Ins, Ins, Match, Match, Match, Match, Match, Match,
+                Match, Match, Match, Match, Match,
+            ],
+        );
+    }
+
+    /// NB: if the jump score is set to -10, then the alignment would jump back in x (3bp), to give
+    /// 17 matches (+17) and one jump (-10) for a score of 7, which is greater than 14 matches (+14)
+    /// and a 3bp deletion (-5 - 1 - 1 -1 = -8) for a score of 6.
+    #[rstest]
+    fn test_left_justify_deletion_in_triplet_with_leading_matches() {
+        let x = s("TTT---GACGACGACGA");
+        let y = s("TTTGACGACGACGACGA");
+        let mut aligner = SingleStrandAligner::default();
+        aligner.scoring.jump_score = -11;
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            14,
+            0,
+            17,
+            14 - (5 + 1) - 1 - 1,
+            &[
+                Match, Match, Match, Del, Del, Del, Match, Match, Match, Match, Match, Match,
+                Match, Match, Match, Match, Match,
+            ],
+        );
+    }
+
+    /// NB: if the jump score is set to -10, then the alignment would jump back in x (3bp), to give
+    /// 17 matches (+17) and one jump (-10) for a score of 7, which is greater than 14 matches (+14)
+    /// and a 3bp deletion (-5 - 1 - 1 -1 = -8) for a score of 6.
+    #[rstest]
+    fn test_x_skip_in_triplet_with_leading_matches() {
+        let x = s("TTT---GACGACGACGA");
+        let y = s("TTTGACGACGACGACGA");
+        let mut aligner = SingleStrandAligner::default();
+        aligner.scoring.jump_score = -10;
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            14,
+            0,
+            17,
+            17 - 10,
+            &[
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Xskip(6),
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+                Match,
+            ],
+        );
+    }
+
+    /// Prefer a mismatch over an insertion and deletion when the mismatch score is less than than
+    /// two times the gap open + gap extend scores. NB: could be either "1I2=1D3=" or "2=1X3=".
+    #[rstest]
+    fn test_prefer_mismatch_over_insertion_and_deletion() {
+        let x = s("AAACCC");
+        let y = s("AAcCCC");
+        let match_fn = MatchParams::new(1, -3);
+        let mut aligner = SingleStrandAligner::new(-1, -1, -10, match_fn);
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            6,
+            0,
+            6,
+            5 - 3,
+            &[Match, Match, Subst, Match, Match, Match],
+        );
+    }
+
+    #[rstest]
+    fn test_prefer_mismatch_over_insertion_and_deletion_when_same_score() {
+        let x = s("AAACCC");
+        let y = s("AAcCCC");
+        // NB: could be either "1I2=1D3=" or "2=1X3="
+        let match_fn = MatchParams::new(1, -4);
+        let mut aligner = SingleStrandAligner::new(-1, -1, -10, match_fn);
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            6,
+            0,
+            6,
+            5 - 4,
+            &[Match, Match, Subst, Match, Match, Match],
+        );
+    }
+
+    /// Prefer an insertion and deletion over a mismatch when the mismatch score is greater than
+    /// two times the gap open + gap extend scores.
+    #[rstest]
+    fn test_prefer_insertion_and_deletion_over_mismatch() {
+        let x = s("AAA-CCC");
+        let y = s("-AACCCC");
+        // NB: could be either "1I2=1D3=" or "2=1X3="
+        // NB: if we prefer a insertion over a deletion, then it would be 2M1D1I3M
+        let match_fn = MatchParams::new(1, -5);
+        let mut aligner = SingleStrandAligner::new(-1, -1, -10, match_fn);
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            6,
+            0,
+            6,
+            5 - (1 + 1) - (1 + 1),
+            &[Ins, Match, Match, Del, Match, Match, Match],
+        );
+    }
+
+    #[rstest]
+    fn test_prefer_one_insertion_with_large_gap_open() {
+        let x = s("ATTTTTTTTTTTA");
+        let y = s("--TTTTTTTTTTt");
+        let match_fn = MatchParams::new(1, -5);
+        let mut aligner = SingleStrandAligner::new(-100, -1, -10000, match_fn);
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            13,
+            0,
+            11,
+            10 - (100 + 1) - 1 - 5,
+            &[
+                Ins, Ins, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match,
+                Subst,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_prefer_two_small_insertions_with_large_gap_extend() {
+        let x = s("ATTTTTTTTTTTA");
+        let y = s("-TTTTTTTTTTT-");
+        let match_fn = MatchParams::new(1, -5);
+        let mut aligner = SingleStrandAligner::new(-1, -100, -10000, match_fn);
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            13,
+            0,
+            11,
+            11 - (100 + 1) - (100 + 1),
+            &[
+                Ins, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match,
+                Ins,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_semiglobal_identical() {
+        let x = s("ACGTAACC");
+        let y = s("ACGTAACC");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.semiglobal(&x, &y);
+        assert_alignment(&alignment, 0, 8, 0, 8, 8, &[Match; 8]);
+    }
+
+    #[rstest]
+    fn test_semiglobal_identical_subsequence() {
+        let x = s("  CCGG  ");
+        let y = s("AACCGGTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.semiglobal(&x, &y);
+        assert_alignment(&alignment, 0, 4, 2, 6, 4, &[Match; 4]);
+    }
+
+    #[rstest]
+    fn test_semiglobal_subsequence_with_mismatch() {
+        let x = s("       CGCGTCGTATACGTCGTT");
+        let y = s("AAGATATCGCGTCGTATACGTCGTa");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.semiglobal(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            18,
+            7,
+            25,
+            17 - 1,
+            &[
+                Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match, Match,
+                Match, Match, Match, Match, Match, Subst,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_semiglobal_subsequence_with_deletion() {
+        let x = s("  CGCG-CGCG  ");
+        let y = s("AACGCGACGCGTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.semiglobal(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            8,
+            2,
+            11,
+            8 - (5 + 1),
+            &[Match, Match, Match, Match, Del, Match, Match, Match, Match],
+        );
+    }
+
+    #[rstest]
+    fn test_semiglobal_insertion_when_x_longer_than_y() {
+        let x = s("AAAAGGGGTTTT");
+        let y = s("AAAA----TTTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.semiglobal(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            12,
+            0,
+            8,
+            8 - (5 + 1) - 1 - 1 - 1,
+            &[
+                Match, Match, Match, Match, Ins, Ins, Ins, Ins, Match, Match, Match, Match,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_global_leading_and_trailing_deletions() {
+        let x = s("-------------------GGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTG---------------------------");
+        let y = s("AGGGCTATAGACTGCTAGAGGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTGAAATGAGCTATTAGTCATGACGCTTTT");
+        let mut aligner = SingleStrandAligner::default();
+        aligner.scoring.jump_score = -1000;
+        let alignment = aligner.global(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Del; 19]);
+        operations.extend(&[Match; 54]);
+        operations.extend(&[Del; 27]);
+        assert_alignment(
+            &alignment,
+            0,
+            54,
+            0,
+            100,
+            54 - (5 + (1 * 19)) - (5 + (1 * 27)),
+            &operations,
+        );
+    }
+
+    #[rstest]
+    fn test_semiglobal_leading_and_trailing_deletions() {
+        let x = s("-------------------GGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTG---------------------------");
+        let y = s("AGGGCTATAGACTGCTAGAGGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTGAAATGAGCTATTAGTCATGACGCTTTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.semiglobal(&x, &y);
+        assert_alignment(&alignment, 0, 54, 19, 73, 54, &[Match; 54]);
+    }
+
+    #[rstest]
+    fn test_local_identical() {
+        let x = s("ACGTAACC");
+        let y = s("ACGTAACC");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        assert_alignment(&alignment, 0, 8, 0, 8, 8, &[Match; 8]);
+    }
+
+    #[rstest]
+    fn test_local_identical_query_in_target() {
+        let x = s("  CCGG  ");
+        let y = s("AACCGGTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        assert_alignment(&alignment, 0, 4, 2, 6, 4, &[Match; 4]);
+    }
+
+    #[rstest]
+    fn test_local_identical_target_in_query() {
+        let x = s("AACCGGTT");
+        let y = s("  CCGG  ");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        assert_alignment(&alignment, 2, 6, 0, 4, 4, &[Match; 4]);
+    }
+
+    #[rstest]
+    fn test_local_y_subsequence_with_a_leading_mismatch() {
+        // NB: first mismatch is not aligned
+        let x = s("AGCGTCGTATACGTCGTA       ");
+        let y = s("cGCGTCGTATACGTCGTAAAGATAT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        assert_alignment(&alignment, 1, 18, 1, 18, 17, &[Match; 17]);
+    }
+
+    #[rstest]
+    fn test_local_y_subsequence_with_a_trailing_mismatch() {
+        let x = s("       CGCGTCGTATACGTCGTT");
+        let y = s("AAGATATCGCGTCGTATACGTCGTa");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        assert_alignment(&alignment, 0, 17, 7, 24, 17, &[Match; 17]);
+    }
+
+    #[rstest]
+    fn test_local_y_subsequence_with_a_gap_in_x() {
+        let x = s("  CCGCG-CGCGC  ");
+        let y = s("AACCGCGACGCGCTT");
+        let mut aligner = SingleStrandAligner::default();
+        aligner.scoring.gap_open = -3;
+        let alignment = aligner.local(&x, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            10,
+            2,
+            13,
+            10 - (3 + 1),
+            &[
+                Match, Match, Match, Match, Match, Del, Match, Match, Match, Match, Match,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_local_y_subsequence_with_a_gap_in_y() {
+        let x = s("AACCGCGACGCGCTT");
+        let y = s("  CCGCG-CGCGC  ");
+        let mut aligner = SingleStrandAligner::default();
+        aligner.scoring.gap_open = -3;
+        let alignment = aligner.local(&x, &y);
+        assert_alignment(
+            &alignment,
+            2,
+            13,
+            0,
+            10,
+            10 - (3 + 1),
+            &[
+                Match, Match, Match, Match, Match, Ins, Match, Match, Match, Match, Match,
+            ],
+        );
+    }
+
+    #[rstest]
+    fn test_local_prefer_match_over_indel() {
+        let x = s("  CGCGCGCG   ");
+        //                    ||||
+        let y = s("AACGCGACGCGTT");
+        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        aligner.scoring.gap_open = -3;
+        let alignment = aligner.local(&x, &y);
+        assert_alignment(&alignment, 0, 4, 2, 6, 4, &[Match; 4]);
+    }
+
+    #[rstest]
+    fn test_local_zero_length_alignment() {
+        let x = s("TTTTT");
+        let y = s("AAAAA");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        assert_alignment(&alignment, 1, 1, 5, 5, 0, &[]);
+    }
+
+    #[rstest]
+    fn test_global_jump_with_leading_and_trailing_matches() {
+        // The first 13bp of x and y align, then last 13bp of x and y align.  The "GATCGATC"
+        // subsequence in x is aligned twice:
+        // y:  TTTTTGATCGATC     ==>     GATCGATCTTTTT
+        // x: [TTTTTGATCGATCTTTTT] [TTTTTGATCGATCTTTTT]
+        // y:
+        let x = s("TTTTT________GATCGATCTTTTT");
+        let y = s("TTTTTGATCGATCGATCGATCTTTTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 13]);
+        operations.push(Xskip(13));
+        operations.extend(&[Match; 13]);
+        assert_alignment(&alignment, 0, 18, 0, 26, 26 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_semiglobal_jump_with_leading_and_trailing_matches() {
+        // The first 13bp of x and y align, then last 13bp of x and y align.  The "GATCGATC"
+        // subsequence in x is aligned twice:
+        // x: [TTTTTGATCGATCTTTTT] [TTTTTGATCGATCTTTTT]
+        // y:  TTTTTGATCGATC     ==>     GATCGATCTTTTT
+        let x = s("TTTTT________GATCGATCTTTTT");
+        let y = s("TTTTTGATCGATCGATCGATCTTTTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.semiglobal(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 13]);
+        operations.push(Xskip(13));
+        operations.extend(&[Match; 13]);
+        assert_alignment(&alignment, 0, 18, 0, 26, 26 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_global_jump_back_to_start_of_x() {
+        // The first 13bp of x and y align, then last 13bp of x and y align.  The "GATCGATC"
+        // subsequence in x is aligned twice:
+        // x: [GATCGATC] [GATCGATC]
+        // y:  GATCGATC==>GATCGATC
+        let x = s("GATCGATC________");
+        let y = s("GATCGATCGATCGATC");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 8]);
+        operations.push(Xskip(8));
+        operations.extend(&[Match; 8]);
+        assert_alignment(&alignment, 0, 8, 0, 16, 16 - 10, &operations);
     }
 }

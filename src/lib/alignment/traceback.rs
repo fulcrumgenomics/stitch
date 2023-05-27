@@ -10,29 +10,40 @@ use serde::Serialize;
     Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize,
 )]
 pub struct TracebackCell {
-    v: u32,
+    // `v` is packed as follows:
+    // - bits 0-3 are for I_POS
+    // - bits 4-7 are for D_POS
+    // - bits 8-11 are for S_POS
+    // - bit 12 is strand flip for S
+    // - bit 13 is strand flip for I
+    // - bits 14-15 are unused.
+    v: u16,
+    // where S is from (jumping)
+    s_from: u32,
+    // where I is from (jumping)
+    i_from: u32,
 }
 
 // Traceback bit positions (LSB)
 pub const I_POS: u8 = 0; // Meaning bits 0,1,2,3 corresponds to I and so on
 pub const D_POS: u8 = 4;
 pub const S_POS: u8 = 8;
-pub const X_POS: u8 = 12;
-pub const L_POS: u8 = 13;
+pub const S_FLIP: u8 = 12;
+pub const I_FLIP: u8 = 13;
 
 // Traceback moves
-pub const TB_START: u32 = 0b0000;
-pub const TB_INS: u32 = 0b0001;
-pub const TB_DEL: u32 = 0b0010;
-pub const TB_SUBST: u32 = 0b0011;
-pub const TB_MATCH: u32 = 0b0100;
+pub const TB_START: u16 = 0b0000;
+pub const TB_INS: u16 = 0b0001;
+pub const TB_DEL: u16 = 0b0010;
+pub const TB_SUBST: u16 = 0b0011;
+pub const TB_MATCH: u16 = 0b0100;
 
-pub const TB_XCLIP_PREFIX: u32 = 0b0101; // prefix clip of x
-pub const TB_XCLIP_SUFFIX: u32 = 0b0110; // suffix clip of x
-pub const TB_YCLIP_PREFIX: u32 = 0b0111; // prefix clip of y
-pub const TB_YCLIP_SUFFIX: u32 = 0b1000; // suffix clip of y
+pub const TB_XCLIP_PREFIX: u16 = 0b0101; // prefix clip of x
+pub const TB_XCLIP_SUFFIX: u16 = 0b0110; // suffix clip of x
+pub const TB_YCLIP_PREFIX: u16 = 0b0111; // prefix clip of y
+pub const TB_YCLIP_SUFFIX: u16 = 0b1000; // suffix clip of y
 
-pub const TB_MAX: u32 = 0b1000; // Useful in checking that the
+pub const TB_MAX: u16 = 0b1000; // Useful in checking that the
                                 // TB value we got is a valid one
 
 impl TracebackCell {
@@ -44,8 +55,8 @@ impl TracebackCell {
 
     /// Sets 4 bits [pos, pos+4) with the 4 LSBs of value
     #[inline(always)]
-    fn set_bits(&mut self, pos: u8, value: u32) {
-        let bits: u32 = (0b1111) << pos;
+    fn set_bits(&mut self, pos: u8, value: u16) {
+        let bits: u16 = (0b1111) << pos;
         assert!(
             value <= TB_MAX,
             "Expected a value <= TB_MAX while setting traceback bits"
@@ -55,72 +66,102 @@ impl TracebackCell {
     }
 
     #[inline(always)]
-    pub fn set_i_bits(&mut self, value: u32) {
+    pub fn set_i_bits(&mut self, value: u16) {
         // Traceback corresponding to matrix I
         self.set_bits(I_POS, value);
     }
 
     #[inline(always)]
-    pub fn set_d_bits(&mut self, value: u32) {
+    pub fn set_d_bits(&mut self, value: u16) {
         // Traceback corresponding to matrix D
         self.set_bits(D_POS, value);
     }
 
     #[inline(always)]
-    pub fn set_s_bits(&mut self, value: u32) {
+    pub fn set_s_bits(&mut self, value: u16) {
         // Traceback corresponding to matrix S
         self.set_bits(S_POS, value);
     }
 
     #[inline(always)]
-    pub fn set_x_bits(&mut self, value: u32) {
-        // Traceback corresponding to matrix S (strand)
-        let bits: u32 = (0b1) << X_POS;
-        self.v = (self.v & !bits) // First clear the bits
-            | (value << X_POS) // And set the bits
+    fn set_flip_strand(&mut self, pos: u8, value: bool) {
+        let bits: u16 = (0b1) << pos;
+        if value {
+            self.v = (self.v & !bits) // First clear the bits
+            | (0b1 << pos) // And set the bits
+        } else {
+            self.v = self.v & !bits // Clear the bits
+        }
     }
 
     #[inline(always)]
-    pub fn set_l_bits(&mut self, value: u32) {
-        // Traceback corresponding to matrix S (from length)
-        let bits: u32 = (0b000_0000_0000_0000_0000) << L_POS;
-        self.v = (self.v & bits) // First clear the bits
-            | (value << L_POS) // And set the bits
+    pub fn set_s_flip_strand(&mut self, value: bool) {
+        self.set_flip_strand(S_FLIP, value);
+    }
+
+    #[inline(always)]
+    pub fn set_i_flip_strand(&mut self, value: bool) {
+        self.set_flip_strand(I_FLIP, value);
+    }
+
+    #[inline(always)]
+    pub fn set_s_from(&mut self, value: u32) {
+        self.s_from = value;
+    }
+
+    #[inline(always)]
+    pub fn set_i_from(&mut self, value: u32) {
+        self.i_from = value;
     }
 
     // Gets 4 bits [pos, pos+4) of v
     #[inline(always)]
-    fn get_bits(self, pos: u8) -> u32 {
+    fn get_bits(self, pos: u8) -> u16 {
         (self.v >> pos) & (0b1111)
     }
 
     #[inline(always)]
-    pub fn get_i_bits(self) -> u32 {
+    pub fn get_i_bits(self) -> u16 {
         self.get_bits(I_POS)
     }
 
     #[inline(always)]
-    pub fn get_d_bits(self) -> u32 {
+    pub fn get_d_bits(self) -> u16 {
         self.get_bits(D_POS)
     }
 
     #[inline(always)]
-    pub fn get_s_bits(self) -> u32 {
+    pub fn get_s_bits(self) -> u16 {
         self.get_bits(S_POS)
     }
 
     #[inline(always)]
-    pub fn get_x_bits(self) -> u32 {
-        (self.v >> X_POS) & (0b1)
+    fn get_flip_strand(self, pos: u8) -> bool {
+        (self.s_from >> pos) & (0b1) == (0b1)
     }
 
     #[inline(always)]
-    pub fn get_l_bits(self) -> u32 {
-        self.v >> L_POS
+    pub fn get_s_flip_strand(self) -> bool {
+        self.get_flip_strand(S_FLIP)
+    }
+
+    #[inline(always)]
+    pub fn get_i_flip_strand(self) -> bool {
+        self.get_flip_strand(I_FLIP)
+    }
+
+    #[inline(always)]
+    pub fn get_s_from(self) -> u32 {
+        self.s_from
+    }
+
+    #[inline(always)]
+    pub fn get_i_from(self) -> u32 {
+        self.i_from
     }
 
     /// Set all matrices to the same value.
-    pub fn set_all(&mut self, value: u32) {
+    pub fn set_all(&mut self, value: u16) {
         self.set_i_bits(value);
         self.set_d_bits(value);
         self.set_s_bits(value);
@@ -150,8 +191,10 @@ impl Traceback {
         self.matrix.clear();
         let mut start = TracebackCell::new();
         start.set_all(TB_START);
-        start.set_x_bits(0);
-        start.set_l_bits(0);
+        start.set_s_flip_strand(false);
+        start.set_i_flip_strand(false);
+        start.set_s_from(0);
+        start.set_i_from(0);
         // set every cell to start
         self.resize(m, n, start);
     }
