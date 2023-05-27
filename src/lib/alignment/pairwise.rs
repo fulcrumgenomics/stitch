@@ -13,22 +13,22 @@ pub struct PairwiseAlignment {
     /// Smith-Waterman alignment score
     pub score: i32,
 
-    /// Start position of alignment in reference
+    /// Start position of alignment in reference (0-based)
     pub ystart: usize,
 
-    /// Start position of alignment in query
+    /// Start position of alignment in query (0-based)
     pub xstart: usize,
 
-    /// End position of alignment in reference
+    /// End position of alignment in reference (0-based exclusive)
     pub yend: usize,
 
-    /// End position of alignment in query
+    /// End position of alignment in query (0-based exclusive)
     pub xend: usize,
 
-    /// Length of the reference sequence
+    /// Length of the reference sequence (not aligned ylen, the original length of y!)
     pub ylen: usize,
 
-    /// Length of the query sequence
+    /// Length of the query sequence (not aligned xlen, the original length of x!)
     pub xlen: usize,
 
     /// If the aligmnent starts on the forward strand (used for double strand alignment)
@@ -37,6 +37,18 @@ pub struct PairwiseAlignment {
     /// Vector of alignment operations
     pub operations: Vec<AlignmentOperation>,
     pub mode: AlignmentMode,
+}
+
+impl PairwiseAlignment {
+    /// The aligned length of y
+    pub fn y_aligned_len(&self) -> usize {
+        self.yend - self.ystart
+    }
+
+    /// The aligned length of x
+    pub fn x_aligned_len(&self) -> usize {
+        self.xend - self.xstart
+    }
 }
 
 /// Generates a padded text representation of the alignment for visualization. The returned

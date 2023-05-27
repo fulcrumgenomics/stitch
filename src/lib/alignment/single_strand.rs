@@ -528,14 +528,11 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                     operations.push(AlignmentOperation::Ins);
                     let i_from = self.traceback.get(i, j).get_i_from() as usize;
                     let i_flip_strand = self.traceback.get(i, j).get_i_flip_strand();
+                    assert!(!i_flip_strand); // single stranded!
                     if i_from == i - 1 {
                         next_layer = self.traceback.get(i, j).get_i_bits();
                     } else {
-                        if i_flip_strand {
-                            operations.push(AlignmentOperation::Xflip(i_from));
-                        } else {
-                            operations.push(AlignmentOperation::Xskip(i_from));
-                        }
+                        operations.push(AlignmentOperation::Xskip(i - 1));
                         next_layer = self.traceback.get(i_from, j).get_i_bits();
                     }
                     i = i_from;
@@ -553,26 +550,34 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                     }
                     let s_from = self.traceback.get(i, j).get_s_from() as usize;
                     let s_flip_strand = self.traceback.get(i, j).get_s_flip_strand();
-                    assert!(!s_flip_strand);
+                    assert!(!s_flip_strand); // single stranded!
                     if s_from == i - 1 {
                         next_layer = self.traceback.get(i - 1, j - 1).get_s_bits();
                     } else {
-                        operations.push(AlignmentOperation::Xskip(s_from));
+                        operations.push(AlignmentOperation::Xskip(i - 1));
                         next_layer = self.traceback.get(s_from, j - 1).get_s_bits();
                     }
                     i = s_from;
                     j -= 1;
                 }
                 TB_XCLIP_PREFIX => {
-                    operations.push(AlignmentOperation::Xclip(i));
-                    xstart = i;
-                    i = 0;
                     next_layer = self.traceback.get(0, j).get_s_bits();
+                    // only add Xclip if there are only clip moves left, since we may have jumped!
+                    if next_layer == TB_START || next_layer == TB_YCLIP_PREFIX {
+                        operations.push(AlignmentOperation::Xclip(i));
+                        xstart = i;
+                    }
+                    i = 0;
                 }
                 TB_XCLIP_SUFFIX => {
-                    operations.push(AlignmentOperation::Xclip(self.Lx[j]));
+                    // only add Xclip if we have added a non-clip move, since we may have jumped!
+                    if operations.is_empty()
+                        || matches!(operations.first().unwrap(), AlignmentOperation::Yclip(_))
+                    {
+                        operations.push(AlignmentOperation::Xclip(self.Lx[j]));
+                        xend = i - self.Lx[j];
+                    }
                     i -= self.Lx[j];
-                    xend = i;
                     next_layer = self.traceback.get(i, j).get_s_bits();
                 }
                 TB_YCLIP_PREFIX => {
@@ -593,6 +598,18 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         }
 
         operations.reverse();
+        {
+            use self::AlignmentOperation::{Xclip, Xskip, Yclip};
+            if operations
+                .iter()
+                .all(|op| matches!(op, Xclip(_) | Yclip(_) | Xskip(_)))
+            {
+                xstart = 0;
+                xend = 0;
+                ystart = 0;
+                yend = 0;
+            }
+        }
         PairwiseAlignment {
             score: self.S[n % 2][m],
             ystart,
@@ -744,11 +761,11 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 // Tests
 #[cfg(test)]
 pub mod tests {
-    use bio::alignment::pairwise::{MatchFunc, MatchParams};
+    use bio::alignment::pairwise::MatchParams;
     use itertools::Itertools;
     use rstest::rstest;
 
-    use crate::alignment::constants::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xskip};
+    use crate::alignment::constants::AlignmentOperation::{Del, Ins, Match, Subst, Xskip};
     use crate::alignment::{constants::AlignmentOperation, pairwise::PairwiseAlignment};
 
     use super::SingleStrandAligner;
@@ -1071,8 +1088,11 @@ pub mod tests {
     /// 17 matches (+17) and one jump (-10) for a score of 7, which is greater than 14 matches (+14)
     /// and a 3bp deletion (-5 - 1 - 1 -1 = -8) for a score of 6.
     #[rstest]
-    fn test_x_skip_in_triplet_with_leading_matches() {
-        let x = s("TTT---GACGACGACGA");
+    fn test_x_jump_in_triplet_with_leading_matches() {
+        //    [0 .. 5]  [3 ...... 13]
+        // x: [TTTGAC]  [GACGACGACGA]
+        // y:  TTTGAC => GACGACGACGA
+        let x = s("TTTGAC___GACGACGA");
         let y = s("TTTGACGACGACGACGA");
         let mut aligner = SingleStrandAligner::default();
         aligner.scoring.jump_score = -10;
@@ -1091,7 +1111,7 @@ pub mod tests {
                 Match,
                 Match,
                 Match,
-                Xskip(6),
+                Xskip(3),
                 Match,
                 Match,
                 Match,
@@ -1418,23 +1438,23 @@ pub mod tests {
         let y = s("AAAAA");
         let mut aligner = SingleStrandAligner::default();
         let alignment = aligner.local(&x, &y);
-        assert_alignment(&alignment, 1, 1, 5, 5, 0, &[]);
+        assert_alignment(&alignment, 0, 0, 0, 0, 0, &[]);
     }
 
     #[rstest]
     fn test_global_jump_with_leading_and_trailing_matches() {
         // The first 13bp of x and y align, then last 13bp of x and y align.  The "GATCGATC"
         // subsequence in x is aligned twice:
-        // y:  TTTTTGATCGATC     ==>     GATCGATCTTTTT
-        // x: [TTTTTGATCGATCTTTTT] [TTTTTGATCGATCTTTTT]
-        // y:
-        let x = s("TTTTT________GATCGATCTTTTT");
+        //    [0 ....... 13]    [5 ...      17]
+        // x: [TTTTTGATCGAT]    [GATCGATCTTTTT]
+        // y:  TTTTTGATCGATC ==> GATCGATCTTTTT
+        let x = s("TTTTTGATCGAT________CTTTTT");
         let y = s("TTTTTGATCGATCGATCGATCTTTTT");
         let mut aligner = SingleStrandAligner::default();
         let alignment = aligner.global(&x, &y);
         let mut operations: Vec<AlignmentOperation> = Vec::new();
         operations.extend(&[Match; 13]);
-        operations.push(Xskip(13));
+        operations.push(Xskip(5));
         operations.extend(&[Match; 13]);
         assert_alignment(&alignment, 0, 18, 0, 26, 26 - 10, &operations);
     }
@@ -1443,15 +1463,16 @@ pub mod tests {
     fn test_semiglobal_jump_with_leading_and_trailing_matches() {
         // The first 13bp of x and y align, then last 13bp of x and y align.  The "GATCGATC"
         // subsequence in x is aligned twice:
-        // x: [TTTTTGATCGATCTTTTT] [TTTTTGATCGATCTTTTT]
-        // y:  TTTTTGATCGATC     ==>     GATCGATCTTTTT
+        //    [0 ....... 13]    [5 ...      17]
+        // x: [TTTTTGATCGATC]   [GATCGATCTTTTT]
+        // y:  TTTTTGATCGATC ==> GATCGATCTTTTT
         let x = s("TTTTT________GATCGATCTTTTT");
         let y = s("TTTTTGATCGATCGATCGATCTTTTT");
         let mut aligner = SingleStrandAligner::default();
         let alignment = aligner.semiglobal(&x, &y);
         let mut operations: Vec<AlignmentOperation> = Vec::new();
         operations.extend(&[Match; 13]);
-        operations.push(Xskip(13));
+        operations.push(Xskip(5));
         operations.extend(&[Match; 13]);
         assert_alignment(&alignment, 0, 18, 0, 26, 26 - 10, &operations);
     }
@@ -1460,6 +1481,7 @@ pub mod tests {
     fn test_global_jump_back_to_start_of_x() {
         // The first 13bp of x and y align, then last 13bp of x and y align.  The "GATCGATC"
         // subsequence in x is aligned twice:
+        //    [0 .... 7] [0 .... 7]
         // x: [GATCGATC] [GATCGATC]
         // y:  GATCGATC==>GATCGATC
         let x = s("GATCGATC________");
@@ -1468,7 +1490,7 @@ pub mod tests {
         let alignment = aligner.global(&x, &y);
         let mut operations: Vec<AlignmentOperation> = Vec::new();
         operations.extend(&[Match; 8]);
-        operations.push(Xskip(8));
+        operations.push(Xskip(0));
         operations.extend(&[Match; 8]);
         assert_alignment(&alignment, 0, 8, 0, 16, 16 - 10, &operations);
     }
@@ -1477,6 +1499,7 @@ pub mod tests {
     fn test_global_triple_jump_back_to_start_of_x() {
         // The first 13bp of x and y align, then last 13bp of x and y align.  The "GATCGATC"
         // subsequence in x is aligned twice:
+        //    [0 .... 7] [0 .... 7] [0 .... 7]
         // x: [GATCGATC] [GATCGATC] [GATCGATC]
         // y:  GATCGATC==>GATCGATC==>GATCGATC
         let x = s("GATCGATC________________");
@@ -1485,15 +1508,15 @@ pub mod tests {
         let alignment = aligner.global(&x, &y);
         let mut operations: Vec<AlignmentOperation> = Vec::new();
         operations.extend(&[Match; 8]);
-        operations.push(Xskip(8));
+        operations.push(Xskip(0));
         operations.extend(&[Match; 8]);
-        operations.push(Xskip(8));
+        operations.push(Xskip(0));
         operations.extend(&[Match; 8]);
         assert_alignment(&alignment, 0, 8, 0, 24, 24 - 10 - 10, &operations);
     }
 
     #[rstest]
-    fn test_sir_jump_a_lot() {
+    fn test_global_sir_jump_a_lot() {
         //    [0 ...... 9] [20 .... 29] [10 .... 19] [30 .... 39]
         // x: [AAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG] [TTTTTTTTTT]
         // y:  AAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG==>TTTTTTTTTT
@@ -1504,12 +1527,54 @@ pub mod tests {
         let alignment = aligner.global(&x, &y);
         let mut operations: Vec<AlignmentOperation> = Vec::new();
         operations.extend(&[Match; 10]);
+        operations.push(Xskip(20));
+        operations.extend(&[Match; 10]);
         operations.push(Xskip(10));
         operations.extend(&[Match; 10]);
         operations.push(Xskip(30));
         operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 0, 40, 0, 40, 40 - 10 - 10 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_semiglobal_sir_jump_a_lot() {
+        //    [0 ...... 9] [20 .... 29] [10 .... 19] [30 .... 39]
+        // x: [AAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG] [TTTTTTTTTT]
+        // y:  AAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG==>TTTTTTTTTT
+        //    [0 ...... 9] [10 .... 19] [20 .... 29] [30 .... 39]
+        let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTTT");
+        let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.semiglobal(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 10]);
         operations.push(Xskip(20));
         operations.extend(&[Match; 10]);
+        operations.push(Xskip(10));
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(30));
+        operations.extend(&[Match; 10]);
         assert_alignment(&alignment, 0, 40, 0, 40, 40 - 10 - 10 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_local_sir_jump_a_lot() {
+        //    [0 ...... 10] [21 .... 30] [11 .... 20] [31 .... 41]
+        // x: [AAAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG] [TTTTTTTTTTT]
+        // y:  AAAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG==>TTTTTTTTTTT
+        //    [0 ...... 10] [11 .... 20] [21 .... 30] [31 .... 41]
+        let x = s("AAAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTTTT");
+        let y = s("AAAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.local(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 11]);
+        operations.push(Xskip(21));
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(11));
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(31));
+        operations.extend(&[Match; 11]);
+        assert_alignment(&alignment, 0, 42, 0, 42, 42 - 10 - 10 - 10, &operations);
     }
 }
