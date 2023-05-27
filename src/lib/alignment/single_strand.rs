@@ -1472,4 +1472,44 @@ pub mod tests {
         operations.extend(&[Match; 8]);
         assert_alignment(&alignment, 0, 8, 0, 16, 16 - 10, &operations);
     }
+
+    #[rstest]
+    fn test_global_triple_jump_back_to_start_of_x() {
+        // The first 13bp of x and y align, then last 13bp of x and y align.  The "GATCGATC"
+        // subsequence in x is aligned twice:
+        // x: [GATCGATC] [GATCGATC] [GATCGATC]
+        // y:  GATCGATC==>GATCGATC==>GATCGATC
+        let x = s("GATCGATC________________");
+        let y = s("GATCGATCGATCGATCGATCGATC");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 8]);
+        operations.push(Xskip(8));
+        operations.extend(&[Match; 8]);
+        operations.push(Xskip(8));
+        operations.extend(&[Match; 8]);
+        assert_alignment(&alignment, 0, 8, 0, 24, 24 - 10 - 10, &operations);
+    }
+
+    #[rstest]
+    fn test_sir_jump_a_lot() {
+        //    [0 ...... 9] [20 .... 29] [10 .... 19] [30 .... 39]
+        // x: [AAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG] [TTTTTTTTTT]
+        // y:  AAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG==>TTTTTTTTTT
+        //    [0 ...... 9] [10 .... 19] [20 .... 29] [30 .... 39]
+        let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTTT");
+        let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTT");
+        let mut aligner = SingleStrandAligner::default();
+        let alignment = aligner.global(&x, &y);
+        let mut operations: Vec<AlignmentOperation> = Vec::new();
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(10));
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(30));
+        operations.extend(&[Match; 10]);
+        operations.push(Xskip(20));
+        operations.extend(&[Match; 10]);
+        assert_alignment(&alignment, 0, 40, 0, 40, 40 - 10 - 10 - 10, &operations);
+    }
 }
