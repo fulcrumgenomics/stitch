@@ -117,7 +117,7 @@ fn align_double_strand<F: MatchFunc>(
     let query = record.seq();
 
     let (banded_fwd, banded_revcomp, prealign_score) =
-        maybe_prealign(query, &target_seq, target_hash, banded_aligner, pre_align);
+        maybe_prealign(query, target_seq, target_hash, banded_aligner, pre_align);
 
     let alignment = {
         if banded_fwd.map_or(true, |score| score >= pre_align_min_score)
@@ -235,7 +235,7 @@ fn to_records<F: MatchFunc>(
 
     // FIXME: is_fwd vs is_forward below
     if let Some((alignment, is_fwd)) = result {
-        let subs = SubAlignment::build(&alignment, &scoring, use_eq_and_x, true);
+        let subs = SubAlignment::build(&alignment, scoring, use_eq_and_x, true);
         let bases = if is_fwd {
             bases.to_vec()
         } else {

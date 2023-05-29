@@ -346,7 +346,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 best_s_score = x_jump.score;
                 let x_jump_len = self.traceback.get(x_jump.from as usize, j - 1).get_s_len() + 1;
                 let s_tb = if p == q { TB_MATCH } else { TB_SUBST };
-                tb.set_s_all(s_tb, x_jump_len, x_jump.from as u32, x_jump.flip_strand);
+                tb.set_s_all(s_tb, x_jump_len, x_jump.from, x_jump.flip_strand);
             }
             // X-prefix clip
             if xclip_score > best_s_score {

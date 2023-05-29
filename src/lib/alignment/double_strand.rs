@@ -18,16 +18,6 @@ use std::i32;
 use super::constants::AlignmentMode;
 use super::constants::MIN_SCORE;
 use super::scoring::Scoring;
-use super::traceback::TracebackCell;
-use super::traceback::TB_DEL;
-use super::traceback::TB_INS;
-use super::traceback::TB_MATCH;
-use super::traceback::TB_START;
-use super::traceback::TB_SUBST;
-use super::traceback::TB_XCLIP_PREFIX;
-use super::traceback::TB_XCLIP_SUFFIX;
-use super::traceback::TB_YCLIP_PREFIX;
-use super::traceback::TB_YCLIP_SUFFIX;
 
 /// A generalized Smith-Waterman aligner, allowing for the alignment to jump forward
 /// (or backward) in `x` (on either same strand).
