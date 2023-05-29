@@ -28,6 +28,66 @@ pub enum AlignmentOperation {
     Xflip(usize), // Consumes N query bases and switches strand
 }
 
+impl AlignmentOperation {
+    pub fn is_special(&self) -> bool {
+        use crate::alignment::constants::AlignmentOperation::{Xclip, Xflip, Xskip, Yclip};
+        matches!(self, Xclip(_) | Yclip(_) | Xskip(_) | Xflip(_))
+    }
+
+    pub fn to_string(&self, x_index: usize) -> String {
+        match *self {
+            AlignmentOperation::Match => "=".to_string(),
+            AlignmentOperation::Subst => "X".to_string(),
+            AlignmentOperation::Del => "D".to_string(),
+            AlignmentOperation::Ins => "I".to_string(),
+            AlignmentOperation::Xclip(l) => format!("{}A", l),
+            AlignmentOperation::Yclip(l) => format!("{}B", l),
+            AlignmentOperation::Xskip(new_x_index) => {
+                if new_x_index > x_index {
+                    format!("{}J", new_x_index - x_index)
+                } else {
+                    format!("{}j", x_index - new_x_index)
+                }
+            }
+            AlignmentOperation::Xflip(new_x_index) => {
+                if new_x_index > x_index {
+                    format!("{}F", new_x_index - x_index)
+                } else {
+                    format!("{}f", x_index - new_x_index)
+                }
+            }
+        }
+    }
+
+    pub fn length_on_x(&self, x_index: i32) -> i32 {
+        use crate::alignment::constants::AlignmentOperation::{
+            Del, Ins, Match, Subst, Xclip, Xflip, Xskip, Yclip,
+        };
+        match *self {
+            Match | Subst | Ins => 1,
+            Del => 0,
+            Xclip(len) => len as i32,
+            Yclip(_) => 0,
+            Xskip(to_x_index) => to_x_index as i32 - x_index,
+            Xflip(to_x_index) => to_x_index as i32 - x_index,
+        }
+    }
+
+    pub fn length_on_y(&self) -> i32 {
+        use crate::alignment::constants::AlignmentOperation::{
+            Del, Ins, Match, Subst, Xclip, Xflip, Xskip, Yclip,
+        };
+        match *self {
+            Match | Subst | Del => 1,
+            Ins => 0,
+            Xclip(_) => 0,
+            Yclip(len) => len as i32,
+            Xskip(_) => 0,
+            Xflip(_) => 0,
+        }
+    }
+}
+
 /// The modes of alignment supported by the aligner include standard modes such as
 /// Global, Semi-Global and Local alignment. In addition to this, user can also invoke
 /// the custom mode. In the custom mode, users can explicitly specify the clipping penalties

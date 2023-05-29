@@ -568,6 +568,7 @@ dependencies = [
  "anyhow",
  "bio",
  "built",
+ "cfg-if",
  "clap",
  "env_logger",
  "fgoxide",

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::alignment::constants::AlignmentMode;
 use crate::alignment::constants::AlignmentOperation;
 
@@ -37,75 +39,135 @@ pub struct PairwiseAlignment {
     /// Vector of alignment operations
     pub operations: Vec<AlignmentOperation>,
     pub mode: AlignmentMode,
+
+    /// Alignment length, excluding any clipped (x or y) bases and jumps.
+    pub length: usize,
 }
 
-/// Generates a padded text representation of the alignment for visualization. The returned
-/// sequence will consist of three lines as follows (minus the labels on the left):
-///
-/// query : ACGTGAACTGACT-ACTGTATGCG
-/// align : |||||  |||||| ||||||||.|
-/// target: ACGTG--CTGACTGACTGTATGGG
-pub fn padded_string(
-    alignment: &PairwiseAlignment,
-    query: &[u8],
-    target: &[u8],
-) -> (String, String, String) {
-    let mut query_buf: String = String::new();
-    let mut align_buf: String = String::new();
-    let mut target_buf: String = String::new();
-    // TODO: need to revcomp query/target if Xflip is contained...
-
-    let mut query_offset = alignment.xstart;
-    let mut target_offset = alignment.ystart;
-
-    alignment.operations.iter().for_each(|op| match *op {
-        AlignmentOperation::Match | AlignmentOperation::Subst => {
-            query_buf.push(query[query_offset] as char);
-            if *op == AlignmentOperation::Match {
-                align_buf.push('|');
+impl PairwiseAlignment {
+    pub fn cigar(&self) -> String {
+        let mut cigar = String::new();
+        if self.operations.is_empty() {
+            return cigar;
+        }
+        let mut x_index: i32 = self.xstart as i32;
+        let mut last_op = self.operations.first().unwrap();
+        let mut last_len = 0;
+        for op in &self.operations {
+            // Should we add the previous operation?
+            if (op.is_special() || op != last_op) && last_len > 0 {
+                cigar.push_str(&format!(
+                    "{}{}",
+                    last_len,
+                    last_op.to_string(x_index as usize)
+                ));
+            }
+            // Update
+            if op.is_special() {
+                cigar.push_str(op.to_string(x_index as usize).as_str());
+                x_index += op.length_on_x(x_index);
+                last_op = op;
+                last_len = 0;
+            } else if op == last_op {
+                x_index += op.length_on_x(x_index);
+                last_len += 1;
             } else {
-                align_buf.push('.');
+                x_index += op.length_on_x(x_index);
+                last_op = op;
+                last_len = 1;
             }
-            target_buf.push(target[target_offset] as char);
-            query_offset += 1;
-            target_offset += 1;
         }
-        AlignmentOperation::Ins => {
-            query_buf.push(query[query_offset] as char);
-            align_buf.push(' ');
-            target_buf.push('-');
-            query_offset += 1;
+        if last_len > 0 {
+            cigar.push_str(&format!(
+                "{}{}",
+                last_len,
+                last_op.to_string(x_index as usize)
+            ));
         }
-        AlignmentOperation::Del => {
-            query_buf.push('-');
-            align_buf.push(' ');
-            target_buf.push(target[target_offset] as char);
-            target_offset += 1;
-        }
-        AlignmentOperation::Xflip(from_i) => {
-            if query_buf.chars().nth(query_buf.len() - 1).unwrap() != ' '
-                && target_buf.chars().nth(target_buf.len() - 1).unwrap() != ' '
-            {
-                query_buf.push('X');
-                align_buf.push('X');
-                target_buf.push('X');
+        cigar
+    }
+
+    /// Generates a padded text representation of the alignment for visualization. The returned
+    /// sequence will consist of three lines as follows (minus the labels on the left):
+    ///
+    /// query : ACGTGAACTGACT-ACTGTATGCG
+    /// align : |||||  |||||| ||||||||.|
+    /// target: ACGTG--CTGACTGACTGTATGGG
+    pub fn padded_string(&self, query: &[u8], target: &[u8]) -> (String, String, String) {
+        let mut query_buf: String = String::new();
+        let mut align_buf: String = String::new();
+        let mut target_buf: String = String::new();
+        // TODO: need to revcomp query/target if Xflip is contained...
+
+        let mut query_offset = self.xstart;
+        let mut target_offset = self.ystart;
+
+        self.operations.iter().for_each(|op| match *op {
+            AlignmentOperation::Match | AlignmentOperation::Subst => {
+                query_buf.push(query[query_offset] as char);
+                if *op == AlignmentOperation::Match {
+                    align_buf.push('|');
+                } else {
+                    align_buf.push('.');
+                }
+                target_buf.push(target[target_offset] as char);
+                query_offset += 1;
+                target_offset += 1;
             }
-            query_offset = from_i;
-        }
-        AlignmentOperation::Xskip(from_i) => {
-            if query_buf.chars().nth(query_buf.len() - 1).unwrap() != ' '
-                && target_buf.chars().nth(target_buf.len() - 1).unwrap() != ' '
-            {
-                query_buf.push(' ');
+            AlignmentOperation::Ins => {
+                query_buf.push(query[query_offset] as char);
                 align_buf.push(' ');
-                target_buf.push(' ');
+                target_buf.push('-');
+                query_offset += 1;
             }
-            query_offset = from_i;
-        }
-        AlignmentOperation::Xclip(from_i) => {
-            query_offset = from_i;
-        }
-        _ => panic!("Unknown operator: {op:?}"),
-    });
-    (query_buf, align_buf, target_buf)
+            AlignmentOperation::Del => {
+                query_buf.push('-');
+                align_buf.push(' ');
+                target_buf.push(target[target_offset] as char);
+                target_offset += 1;
+            }
+            AlignmentOperation::Xflip(from_i) => {
+                if query_buf.chars().nth(query_buf.len() - 1).unwrap() != ' '
+                    && target_buf.chars().nth(target_buf.len() - 1).unwrap() != ' '
+                {
+                    query_buf.push('X');
+                    align_buf.push('X');
+                    target_buf.push('X');
+                }
+                query_offset = from_i;
+            }
+            AlignmentOperation::Xskip(from_i) => {
+                if query_buf.chars().nth(query_buf.len() - 1).unwrap() != ' '
+                    && target_buf.chars().nth(target_buf.len() - 1).unwrap() != ' '
+                {
+                    query_buf.push(' ');
+                    align_buf.push(' ');
+                    target_buf.push(' ');
+                }
+                query_offset = from_i;
+            }
+            AlignmentOperation::Xclip(from_i) => {
+                query_offset = from_i;
+            }
+            _ => panic!("Unknown operator: {op:?}"),
+        });
+        (query_buf, align_buf, target_buf)
+    }
+}
+
+impl fmt::Display for PairwiseAlignment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "x-span: {}-{} y=span: {}-{} score: {} strand: {} cigar: {} aln-len: {}",
+            self.xstart,
+            self.xend,
+            self.ystart,
+            self.yend,
+            self.score,
+            if self.is_forward { "+" } else { "-" },
+            self.cigar(),
+            self.length
+        )
+    }
 }

@@ -16,6 +16,7 @@ use std::i32;
 use super::constants::AlignmentMode;
 use super::constants::MIN_SCORE;
 use super::scoring::Scoring;
+use super::traceback::TracebackCell;
 use super::traceback::TB_DEL;
 use super::traceback::TB_INS;
 use super::traceback::TB_MATCH;
@@ -203,25 +204,26 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         } else {
             &self.reverse
         };
+        let alignment_length = cur_aligner.traceback.get(i, j).get_s_len();
 
-        let mut last_layer = cur_aligner.traceback.get(i, j).get_s_bits();
+        let mut last_layer = cur_aligner.traceback.get(i, j).get_s().tb;
         loop {
             let cur_aligner = if cur_is_forward {
                 &self.forward
             } else {
                 &self.reverse
             };
-            let next_layer: u16;
+            let next_layer: u8;
             match last_layer {
                 TB_START => break,
                 TB_INS => {
                     operations.push(AlignmentOperation::Ins);
-                    next_layer = cur_aligner.traceback.get(i, j).get_i_bits();
+                    next_layer = cur_aligner.traceback.get(i, j).get_i().0;
                     i -= 1;
                 }
                 TB_DEL => {
                     operations.push(AlignmentOperation::Del);
-                    next_layer = cur_aligner.traceback.get(i, j).get_d_bits();
+                    next_layer = cur_aligner.traceback.get(i, j).get_d().0;
                     j -= 1;
                 }
                 TB_MATCH | TB_SUBST => {
@@ -230,17 +232,17 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
                     } else {
                         operations.push(AlignmentOperation::Subst);
                     }
-                    let s_from = cur_aligner.traceback.get(i, j).get_s_from() as usize;
-                    let s_flip_strand = cur_aligner.traceback.get(i, j).get_s_flip_strand();
+                    let s_value = cur_aligner.traceback.get(i, j).get_s();
+                    let s_from = s_value.from as usize;
                     if s_from != i - 1 {
-                        if s_flip_strand {
+                        if s_value.strand {
                             operations.push(AlignmentOperation::Xflip(s_from));
                             cur_is_forward = !cur_is_forward;
                         } else {
                             operations.push(AlignmentOperation::Xskip(s_from));
                         }
                     }
-                    next_layer = cur_aligner.traceback.get(s_from, j - 1).get_s_bits();
+                    next_layer = cur_aligner.traceback.get(s_from, j - 1).get_s().tb;
                     i = s_from;
                     j -= 1;
                 }
@@ -248,25 +250,25 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
                     operations.push(AlignmentOperation::Xclip(i));
                     xstart = i;
                     i = 0;
-                    next_layer = cur_aligner.traceback.get(0, j).get_s_bits();
+                    next_layer = cur_aligner.traceback.get(0, j).get_s().tb;
                 }
                 TB_XCLIP_SUFFIX => {
                     operations.push(AlignmentOperation::Xclip(cur_aligner.Lx[j]));
                     i -= cur_aligner.Lx[j];
                     xend = i;
-                    next_layer = cur_aligner.traceback.get(i, j).get_s_bits();
+                    next_layer = cur_aligner.traceback.get(i, j).get_s().tb;
                 }
                 TB_YCLIP_PREFIX => {
                     operations.push(AlignmentOperation::Yclip(j));
                     ystart = j;
                     j = 0;
-                    next_layer = cur_aligner.traceback.get(i, 0).get_s_bits();
+                    next_layer = cur_aligner.traceback.get(i, 0).get_s().tb;
                 }
                 TB_YCLIP_SUFFIX => {
                     operations.push(AlignmentOperation::Yclip(cur_aligner.Ly[i]));
                     j -= cur_aligner.Ly[i];
                     yend = j;
-                    next_layer = cur_aligner.traceback.get(i, j).get_s_bits();
+                    next_layer = cur_aligner.traceback.get(i, j).get_s().tb;
                 }
                 _ => panic!("Dint expect this!"),
             }
@@ -285,19 +287,20 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
             is_forward: cur_is_forward,
             operations,
             mode: AlignmentMode::Custom,
+            length: alignment_length as usize,
         }
     }
 
     fn fill_x_buffer_stranded(&mut self, m: usize) {
         for i in 0..=m {
-            let (fwd_score, fwd_from, fwd_strand) = self.forward.x_buffer.get(i);
-            let (rev_score, rev_from, rev_strand) = self.reverse.x_buffer.get(i);
-            assert!(!fwd_strand, "Bug: fwd strand");
-            assert!(!rev_strand, "Bug: rev strand");
-            if fwd_score < rev_score {
-                self.forward.x_buffer.set(i, rev_score, rev_from, true);
+            let fwd = self.forward.x_buffer.get(i);
+            let rev = self.reverse.x_buffer.get(i);
+            assert!(!fwd.flip_strand, "Bug: fwd strand");
+            assert!(!rev.flip_strand, "Bug: rev strand");
+            if fwd.score < rev.score {
+                self.forward.x_buffer.set(i, rev.score, rev.from, true);
             } else {
-                self.reverse.x_buffer.set(i, fwd_score, fwd_from, true);
+                self.reverse.x_buffer.set(i, fwd.score, fwd.from, true);
             }
         }
     }
@@ -333,10 +336,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
             // Initiliaze the jump buffers
             self.forward
                 .x_buffer
-                .fill(m, prev, &self.forward.S, &self.forward.scoring);
+                .fill(m, j, &self.forward.S, &self.forward.scoring);
             self.reverse
                 .x_buffer
-                .fill(m, prev, &self.reverse.S, &self.reverse.scoring);
+                .fill(m, j, &self.reverse.S, &self.reverse.scoring);
             self.fill_x_buffer_stranded(m);
 
             // Fill the column
