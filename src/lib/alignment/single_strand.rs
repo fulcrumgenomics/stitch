@@ -414,6 +414,10 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 self.Ly[i] = n - j;
             }
 
+            if i == 4 && j == 4 {
+                eprintln!("fill_column i: {i} j: {j} best_s_score: {best_s_score}");
+            }
+
             self.traceback.set(i, j, tb);
         }
     }
