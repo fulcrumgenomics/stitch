@@ -13,7 +13,7 @@ pub struct SValue {
     pub tb: u8,
     pub len: u32,
     pub from: u32,
-    pub strand: bool,
+    pub flip_strand: bool,
 }
 
 pub trait TracebackCell: Clone {
@@ -81,12 +81,6 @@ pub fn traceback_double_stranded<F: MatchFunc>(
     let mut xend = m;
     let mut yend = n;
 
-    eprintln!(
-        "traceback_double_stranded fwd_score: {} rev_score: {}",
-        forward.S[n % 2][m],
-        reverse.S[n % 2][m]
-    );
-
     // If the scores equal, pick the one with the longer alignment length
     let mut cur_is_forward = match forward.S[n % 2][m].cmp(&reverse.S[n % 2][m]) {
         std::cmp::Ordering::Less => false,
@@ -104,7 +98,6 @@ pub fn traceback_double_stranded<F: MatchFunc>(
     let mut last_layer = cur_aligner.traceback.get(i, j).get_s().tb;
     loop {
         cur_aligner = if cur_is_forward { &forward } else { &reverse };
-        eprintln!("last_layer: {last_layer} cur_is_forward: {cur_is_forward}");
         let next_layer: u8;
         match last_layer {
             TB_START => break,
@@ -126,8 +119,7 @@ pub fn traceback_double_stranded<F: MatchFunc>(
                 }
                 let s_value = cur_aligner.traceback.get(i, j).get_s();
                 let s_from = s_value.from as usize;
-                eprintln!("  i: {i} j: {j} s: {s_value:?}");
-                if s_value.strand {
+                if s_value.flip_strand {
                     operations.push(AlignmentOperation::Xflip(i - 1));
                     cur_is_forward = !cur_is_forward;
                     cur_aligner = if cur_is_forward { &forward } else { &reverse };
@@ -176,19 +168,22 @@ pub fn traceback_double_stranded<F: MatchFunc>(
             }
             TB_XJUMP => {
                 let s_value = cur_aligner.traceback.get(i, j).get_s();
-                if s_value.strand {
+                let s_from;
+                if s_value.flip_strand {
                     operations.push(AlignmentOperation::Xflip(i));
                     cur_is_forward = !cur_is_forward;
                     cur_aligner = if cur_is_forward { &forward } else { &reverse };
+                    s_from = s_value.from;
                 } else {
                     operations.push(AlignmentOperation::Xskip(i));
+                    s_from = s_value.from;
                 }
                 next_layer = cur_aligner
                     .traceback
                     .get(s_value.from as usize, j)
                     .get_s()
                     .tb;
-                i = s_value.from as usize;
+                i = s_from as usize;
             }
             _ => panic!("Dint expect this!"),
         }
@@ -196,7 +191,6 @@ pub fn traceback_double_stranded<F: MatchFunc>(
     }
 
     operations.reverse();
-    eprintln!("operations: {operations:?}");
     {
         use AlignmentOperation::{Xclip, Xskip, Yclip};
         if operations

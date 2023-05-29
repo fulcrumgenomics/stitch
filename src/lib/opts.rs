@@ -74,8 +74,10 @@ pub struct Opts {
     #[clap(long, short = 'J', default_value = "-10", display_order = 15)]
     pub jump_score: i32,
 
-    /// FIXME: not wired in
     /// The alignment mode
+    /// - Local: aligns a sub-sequence of the read versus a sub-sequence of the reference
+    /// - Semiglobal: aligns the full read versus a sub-sequence of the reference
+    /// - Global: aligns the full read versus the full reference
     #[clap(long, short = 'm', default_value = "local", display_order = 16)]
     pub mode: AlignmentMode,
 

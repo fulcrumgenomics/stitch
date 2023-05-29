@@ -116,16 +116,5 @@ impl XBuffer {
                 self.from[k] = prev_prefix_from;
             }
         }
-
-        if j + 1 == 5 {
-            for i in 1..=m {
-                eprintln!(
-                    "x_buffer.fill i: {i} j: {} score: {} from: {}",
-                    j + 1,
-                    self.score[i],
-                    self.from[i]
-                );
-            }
-        }
     }
 }

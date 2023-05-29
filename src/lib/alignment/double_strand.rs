@@ -10,7 +10,6 @@ use crate::alignment::constants::DEFAULT_ALIGNER_CAPACITY;
 use crate::alignment::pairwise::PairwiseAlignment;
 use crate::alignment::single_strand::SingleStrandAligner;
 use crate::alignment::traceback::traceback_double_stranded;
-use crate::alignment::traceback::TracebackCell;
 use bio::alignment::pairwise::MatchFunc;
 use bio::alignment::pairwise::MatchParams;
 use bio::utils::TextSlice;
@@ -65,8 +64,8 @@ use super::scoring::Scoring;
 ///
 /// `scoring` - see [`bio::alignment::pairwise::Scoring`](struct.Scoring.html)
 pub struct DoubleStrandAligner<F: MatchFunc> {
-    forward: SingleStrandAligner<F>,
-    reverse: SingleStrandAligner<F>,
+    pub forward: SingleStrandAligner<F>,
+    pub reverse: SingleStrandAligner<F>,
 }
 
 impl<F: MatchFunc> DoubleStrandAligner<F> {
@@ -139,21 +138,12 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     /// # Arguments
     ///
     /// * `scoring` - the scoring struct (see bio::alignment::pairwise::Scoring)
-    pub fn with_scoring(
-        match_fn_fwd: F,
-        match_fn_revcomp: F,
-        gap_open: i32,
-        gap_extend: i32,
-        jump_score: i32,
-    ) -> Self {
+    pub fn with_scoring(scoring_fwd: Scoring<F>, scoring_rev: Scoring<F>) -> Self {
         DoubleStrandAligner::with_capacity_and_scoring(
             DEFAULT_ALIGNER_CAPACITY,
             DEFAULT_ALIGNER_CAPACITY,
-            match_fn_fwd,
-            match_fn_revcomp,
-            gap_open,
-            gap_extend,
-            jump_score,
+            scoring_fwd,
+            scoring_rev,
         )
     }
 
@@ -168,60 +158,50 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     pub fn with_capacity_and_scoring(
         m: usize,
         n: usize,
-        match_fn_fwd: F,
-        match_fn_revcomp: F,
-        gap_open: i32,
-        gap_extend: i32,
-        jump_score: i32,
+        scoring_fwd: Scoring<F>,
+        scoring_rev: Scoring<F>,
     ) -> Self {
-        let scoring_fwd = Scoring::new(gap_open, gap_extend, jump_score, match_fn_fwd);
-        let scoring_rev = Scoring::new(gap_open, gap_extend, jump_score, match_fn_revcomp);
         DoubleStrandAligner {
             forward: SingleStrandAligner::with_capacity_and_scoring(m, n, scoring_fwd),
             reverse: SingleStrandAligner::with_capacity_and_scoring(m, n, scoring_rev),
         }
     }
 
-    fn fill_x_buffer_stranded(&mut self, j: usize, m: usize) {
+    fn fill_x_buffer_stranded(&mut self, m: usize) {
         for i in 0..=m {
             let fwd = self.forward.x_buffer.get(i);
             let rev = self.reverse.x_buffer.get(i);
             assert!(!fwd.flip_strand, "Bug: fwd strand");
             assert!(!rev.flip_strand, "Bug: rev strand");
 
-            // if j + 1 == 5 {
-            //     eprintln!(
-            //         "fill_x_buffer_stranded BEFORE i: {i} j: {j} fwd.score: {} rev.score: {}",
-            //         fwd.score, rev.score
-            //     );
-            // }
-
             match fwd.score.cmp(&rev.score) {
-                std::cmp::Ordering::Less => {
-                    eprintln!(
-                        "i: {i} j: {j} FWD<REV fwd.score: {} rev.score: {}",
-                        fwd.score, rev.score
-                    );
-                    self.forward.x_buffer.set(i, rev.score, rev.from, true)
-                }
+                std::cmp::Ordering::Less => self.forward.x_buffer.set(i, rev.score, rev.from, true),
                 std::cmp::Ordering::Greater => {
-                    eprintln!(
-                        "i: {i} j: {j} FWD>REV fwd.score: {} rev.score: {}",
-                        fwd.score, rev.score
-                    );
                     self.reverse.x_buffer.set(i, fwd.score, fwd.from, true)
                 }
                 std::cmp::Ordering::Equal => (),
             };
+        }
+    }
 
-            // if j + 1 == 5 {
-            //     let fwd = self.forward.x_buffer.get(i);
-            //     let rev = self.reverse.x_buffer.get(i);
-            //     eprintln!(
-            //         "fill_x_buffer_stranded AFTER i: {i} j: {j} fwd.score: {} rev.score: {}",
-            //         fwd.score, rev.score
-            //     );
-            // }
+    /// Computes the alignment based on mode.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - Textslice
+    /// * `y` - Textslice
+    pub fn align(
+        &mut self,
+        x_forward: TextSlice<'_>,
+        x_revcomp: TextSlice<'_>,
+        y: TextSlice<'_>,
+        mode: AlignmentMode,
+    ) -> PairwiseAlignment {
+        match mode {
+            AlignmentMode::Global => self.global(x_forward, x_revcomp, y),
+            AlignmentMode::Semiglobal => self.semiglobal(x_forward, x_revcomp, y),
+            AlignmentMode::Local => self.local(x_forward, x_revcomp, y),
+            AlignmentMode::Custom => self.custom(x_forward, x_revcomp, y),
         }
     }
 
@@ -246,7 +226,6 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.reverse.init_matrices(m, n);
 
         for j in 1..=n {
-            let i: usize = j; // FIXME: remove me
             let curr = j % 2;
             let prev = 1 - curr;
 
@@ -261,21 +240,11 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
             self.reverse
                 .x_buffer
                 .fill(m, j - 1, &self.reverse.S, &self.reverse.scoring);
-            self.fill_x_buffer_stranded(j - 1, m);
-            // FIXME: jump includes an addend
+            self.fill_x_buffer_stranded(m);
 
             // Fill the column
             self.forward.fill_column(x_forward, y, m, n, j, prev, curr);
             self.reverse.fill_column(x_revcomp, y, m, n, j, prev, curr);
-            if i == j {
-                eprintln!(
-                    "ds END i: {i} j: {j} fwd_score: {} fwd_s: {:?} rev_score: {} rev_s: {:?}",
-                    self.forward.S[curr][i],
-                    self.forward.traceback.get(i, j).get_s(),
-                    self.reverse.S[curr][i],
-                    self.reverse.traceback.get(i, j).get_s(),
-                );
-            }
         }
 
         self.forward.fill_last_column_and_end_clipping(m, n);
@@ -563,7 +532,7 @@ pub mod tests {
     }
 
     #[rstest]
-    fn test_rev_to_fwdjump() {
+    fn test_rev_to_fwd_jump() {
         let x = s("CCAAGGTT");
         let x_revcomp = reverse_complement(&x);
         let y = s("AACCGGTT");
@@ -572,5 +541,34 @@ pub mod tests {
             DoubleStrandAligner::new(-100_000, -100_000, -1, match_fn);
         let alignment = aligner.global(&x, &x_revcomp, &y);
         assert_alignment(&alignment, 0, 8, 0, 8, 8 - 1, false, "4=0f4=", 8);
+    }
+
+    #[rstest]
+    fn test_fwd_to_rev_long_jump() {
+        // x fwd: AACCAAAATTGG
+        //        ||||
+        // y    : AACCNNNNGGTT
+        //                ||||
+        // x rev: CCAA____GGTT
+        let x = s("AACCAAAATTGG");
+        let x_revcomp = reverse_complement(&x); // CCAATTTTGGTT
+        let y = s("AACCGGTT");
+        let match_fn = || MatchParams::new(1, -100_000);
+        let mut aligner: DoubleStrandAligner<MatchParams> =
+            DoubleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        let alignment = aligner.global(&x, &x_revcomp, &y);
+        assert_alignment(&alignment, 0, 12, 0, 8, 8 - 1, true, "4=4F4=", 8);
+    }
+
+    #[rstest]
+    fn test_rev_to_fwd_long_jump() {
+        let x = s("CCAANNNNGGTT");
+        let x_revcomp = reverse_complement(&x);
+        let y = s("AACCGGTT");
+        let match_fn = || MatchParams::new(1, -100_000);
+        let mut aligner: DoubleStrandAligner<MatchParams> =
+            DoubleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        let alignment = aligner.global(&x, &x_revcomp, &y);
+        assert_alignment(&alignment, 0, 12, 0, 8, 8 - 1, false, "4=4F4=", 8);
     }
 }

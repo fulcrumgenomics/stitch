@@ -414,10 +414,6 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 self.Ly[i] = n - j;
             }
 
-            if i == 4 && j == 4 {
-                eprintln!("fill_column i: {i} j: {j} best_s_score: {best_s_score}");
-            }
-
             self.traceback.set(i, j, tb);
         }
     }
@@ -431,10 +427,13 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             // jump over the remaining i bases in x
             if self.S[curr][i] + self.scoring.jump_score > self.S[curr][m] {
                 self.S[curr][m] = self.S[curr][i] + self.scoring.jump_score;
-                let prev_len = self.traceback.get(i, j).get_s_len();
-                self.traceback
-                    .get_mut(m, j)
-                    .set_s_all(TB_XJUMP, prev_len, i as u32, false);
+                let prev_s = self.traceback.get(i, j).get_s();
+                self.traceback.get_mut(m, j).set_s_all(
+                    TB_XJUMP,
+                    prev_s.len,
+                    i as u32,
+                    prev_s.flip_strand,
+                );
             }
 
             // y-clip
@@ -458,7 +457,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                     // s_value.len + self.Ly[i] as u32,
                     s_value.len,
                     i as u32,
-                    s_value.strand,
+                    s_value.flip_strand,
                 );
             }
 
@@ -631,6 +630,26 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             traceback: Traceback::with_capacity(m, n),
             scoring,
             x_buffer: XBuffer::new(m),
+        }
+    }
+
+    /// Computes the alignment based on mode.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` - Textslice
+    /// * `y` - Textslice
+    pub fn align(
+        &mut self,
+        x: TextSlice<'_>,
+        y: TextSlice<'_>,
+        mode: AlignmentMode,
+    ) -> PairwiseAlignment {
+        match mode {
+            AlignmentMode::Global => self.global(x, y),
+            AlignmentMode::Semiglobal => self.semiglobal(x, y),
+            AlignmentMode::Local => self.local(x, y),
+            AlignmentMode::Custom => self.custom(x, y),
         }
     }
 
@@ -1001,7 +1020,6 @@ pub mod tests {
         );
     }
 
-    // FIXME: sequence after deletion
     /// NB: if the jump score is set to -11, then the alignment would jump back in x (3bp), to give
     /// 17 matches (+17) and one jump (-11) for a score of 6, which is equal to 14 matches (+14)
     /// and a 3bp deletion (-5 - 1 - 1 -1 = -8) for a score of 6.  We prefer the deletion in this case.
@@ -1023,8 +1041,6 @@ pub mod tests {
             17,
         );
     }
-
-    // FIXME: sequence after jump
 
     /// NB: if the jump score is set to -10, then the alignment would jump back in x (3bp), to give
     /// 17 matches (+17) and one jump (-10) for a score of 7, which is greater than 14 matches (+14)

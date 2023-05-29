@@ -136,7 +136,7 @@ impl TracebackCell for PackedLengthCell {
             tb: self.get_tb(self.s),
             len: self.get_s_len(),
             from: self.s_from,
-            strand: self.get_strand(self.s),
+            flip_strand: self.get_strand(self.s),
         }
     }
 

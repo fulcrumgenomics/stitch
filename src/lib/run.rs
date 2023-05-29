@@ -1,3 +1,5 @@
+use crate::alignment::constants::AlignmentMode;
+use crate::alignment::constants::MIN_SCORE;
 use crate::alignment::double_strand::DoubleStrandAligner;
 use crate::alignment::pairwise::PairwiseAlignment;
 use crate::alignment::scoring::Scoring;
@@ -105,8 +107,7 @@ fn align_double_strand<F: MatchFunc>(
     record: FastqOwnedRecord,
     target_seq: &TargetSeq,
     target_hash: &TargetHash,
-    ds_aligner: &mut DoubleStrandAligner<F>,
-    banded_aligner: &mut BandedAligner<F>,
+    aligners: &mut Aligners<F>,
     pre_align: bool,
     pre_align_min_score: i32,
 ) -> (
@@ -116,14 +117,23 @@ fn align_double_strand<F: MatchFunc>(
 ) {
     let query = record.seq();
 
-    let (banded_fwd, banded_revcomp, prealign_score) =
-        maybe_prealign(query, target_seq, target_hash, banded_aligner, pre_align);
+    let (banded_fwd, banded_revcomp, prealign_score) = maybe_prealign(
+        query,
+        target_seq,
+        target_hash,
+        &mut aligners.banded,
+        pre_align,
+    );
 
     let alignment = {
         if banded_fwd.map_or(true, |score| score >= pre_align_min_score)
             || banded_revcomp.map_or(true, |score| score >= pre_align_min_score)
         {
-            Some(ds_aligner.semiglobal(&target_seq.fwd, &target_seq.revcomp, query))
+            Some(
+                aligners
+                    .double_strand
+                    .custom(&target_seq.fwd, &target_seq.revcomp, query),
+            )
         } else {
             None
         }
@@ -142,8 +152,7 @@ fn align_single_strand<F: MatchFunc>(
     record: FastqOwnedRecord,
     target_seq: &TargetSeq,
     target_hash: &TargetHash,
-    ss_aligner: &mut SingleStrandAligner<F>,
-    banded_aligner: &mut BandedAligner<F>,
+    aligners: &mut Aligners<F>,
     pre_align: bool,
     pre_align_min_score: i32,
 ) -> (
@@ -152,17 +161,22 @@ fn align_single_strand<F: MatchFunc>(
     Option<i32>,
 ) {
     let query = record.seq();
-    let (banded_fwd, banded_revcomp, prealign_score) =
-        maybe_prealign(query, target_seq, target_hash, banded_aligner, pre_align);
+    let (banded_fwd, banded_revcomp, prealign_score) = maybe_prealign(
+        query,
+        target_seq,
+        target_hash,
+        &mut aligners.banded,
+        pre_align,
+    );
 
     let fwd: Option<PairwiseAlignment> =
         if banded_fwd.map_or(true, |score| score >= pre_align_min_score) {
-            Some(ss_aligner.semiglobal(&target_seq.fwd, query))
+            Some(aligners.single_strand.custom(&target_seq.fwd, query))
         } else {
             None
         };
     let revcomp = if banded_revcomp.map_or(true, |score| score >= pre_align_min_score) {
-        Some(ss_aligner.semiglobal(&target_seq.revcomp, query))
+        Some(aligners.single_strand.custom(&target_seq.revcomp, query))
     } else {
         None
     };
@@ -386,9 +400,110 @@ fn to_records<F: MatchFunc>(
     }
 }
 
+pub struct Aligners<F: MatchFunc> {
+    banded: BandedAligner<F>,
+    single_strand: SingleStrandAligner<F>,
+    double_strand: DoubleStrandAligner<F>,
+}
+
+impl Aligners<MatchParams> {
+    fn build_match_fn(match_score: i32, mismatch_score: i32) -> MatchParams {
+        MatchParams::new(match_score, mismatch_score)
+    }
+
+    fn build_stranded_scoring(
+        opts: &Opts,
+        xclip_prefix: i32,
+        xclip_suffix: i32,
+        yclip_prefix: i32,
+        yclip_suffix: i32,
+    ) -> Scoring<MatchParams> {
+        let mut scoring = Scoring::new(
+            opts.gap_open,
+            opts.gap_extend,
+            opts.jump_score,
+            Self::build_match_fn(opts.match_score, opts.mismatch_score),
+        );
+        scoring.xclip_prefix = xclip_prefix;
+        scoring.xclip_suffix = xclip_suffix;
+        scoring.yclip_prefix = yclip_prefix;
+        scoring.yclip_suffix = yclip_suffix;
+        scoring
+    }
+
+    pub fn new(opts: &Opts, target_seq_len: usize) -> Aligners<MatchParams> {
+        let (xclip_prefix, xclip_suffix, yclip_prefix, yclip_suffix) = match opts.mode {
+            AlignmentMode::Local => (0, 0, 0, 0),
+            AlignmentMode::Semiglobal => (MIN_SCORE, MIN_SCORE, 0, 0),
+            AlignmentMode::Global => (MIN_SCORE, MIN_SCORE, MIN_SCORE, MIN_SCORE),
+            AlignmentMode::Custom => panic!("Custom alignment mode not supported"), // TODO: move to main run method
+        };
+
+        let banded_scoring = {
+            let mut scoring = BioScoring::new(
+                opts.gap_open,
+                opts.gap_extend,
+                Self::build_match_fn(opts.match_score, opts.mismatch_score),
+            );
+            scoring.xclip_prefix = xclip_prefix;
+            scoring.xclip_suffix = xclip_suffix;
+            scoring.yclip_prefix = yclip_prefix;
+            scoring.yclip_suffix = yclip_suffix;
+            scoring
+        };
+
+        let banded = BandedAligner::with_capacity_and_scoring(
+            10000,
+            target_seq_len,
+            banded_scoring,
+            opts.k,
+            opts.w,
+        );
+        let single_strand = SingleStrandAligner::with_capacity_and_scoring(
+            10000,
+            target_seq_len,
+            Self::build_stranded_scoring(
+                opts,
+                xclip_prefix,
+                xclip_suffix,
+                yclip_prefix,
+                yclip_suffix,
+            ),
+        );
+        let double_strand: DoubleStrandAligner<MatchParams> = {
+            let scoring_fwd = Self::build_stranded_scoring(
+                &opts.clone(),
+                xclip_prefix,
+                xclip_suffix,
+                yclip_prefix,
+                yclip_suffix,
+            );
+            let scoring_rev = Self::build_stranded_scoring(
+                &opts.clone(),
+                xclip_prefix,
+                xclip_suffix,
+                yclip_prefix,
+                yclip_suffix,
+            );
+
+            DoubleStrandAligner::with_capacity_and_scoring(
+                10000,
+                target_seq_len,
+                scoring_fwd,
+                scoring_rev,
+            )
+        };
+
+        Self {
+            banded,
+            single_strand,
+            double_strand,
+        }
+    }
+}
+
 pub fn run(opts: &Opts) -> Result<()> {
     // ensure!(opts.threads > 1, "Must specify at least two threads");
-
     let progress_logger = ProgLogBuilder::new()
         .name("fqcv-progress")
         .noun("reads")
@@ -408,62 +523,14 @@ pub fn run(opts: &Opts) -> Result<()> {
 
     let sleep_delay = Duration::from_millis(25);
 
-    let match_fn: MatchParams = MatchParams::new(opts.match_score, opts.mismatch_score);
-    let match_fn_revcomp: MatchParams = MatchParams::new(opts.match_score, opts.mismatch_score);
-
-    // // Set up the match function to use for scoring in the aligner
-    // let match_fn = {
-    //     let match_score: i32 = opts.match_score;
-    //     let mismatch_score: i32 = opts.mismatch_score;
-    //     move |a: u8, b: u8| {
-    //         if a == b {
-    //             match_score
-    //         } else {
-    //             mismatch_score
-    //         }
-    //     }
-    // };
-    let scoring_bio = BioScoring::new(opts.gap_open, opts.gap_extend, match_fn);
-
     let thread_handles: Vec<JoinHandle<Result<()>>> = (0..opts.threads)
         .map(|_| {
             let to_align_rx = reader.to_align_rx.clone();
             let shutdown_rx = shutdown_rx.clone();
             let target_name = target_name.clone();
             let target_seq = target_seq.clone();
-            let mut ss_aligner = SingleStrandAligner::with_capacity_and_scoring(
-                10000,
-                target_seq.len(),
-                Scoring::new(opts.gap_open, opts.gap_extend, opts.jump_score, match_fn),
-            );
-            let mut ds_aligner: DoubleStrandAligner<_> =
-                DoubleStrandAligner::with_capacity_and_scoring(
-                    10000,
-                    target_seq.len(),
-                    match_fn,
-                    match_fn_revcomp,
-                    opts.gap_open,
-                    opts.gap_extend,
-                    opts.jump_score,
-                );
+            let mut aligners = Aligners::new(opts, target_seq.len());
             let opts = opts.clone();
-            let mut banded_aligner = {
-                let mut aligner = BandedAligner::with_capacity_and_scoring(
-                    10000,
-                    target_seq.len(),
-                    scoring_bio,
-                    opts.k,
-                    opts.w,
-                );
-                let scoring: &mut bio::alignment::pairwise::Scoring<_> = aligner.get_mut_scoring();
-
-                // Temporarily Over-write the clip penalties
-                scoring.xclip_prefix = 0;
-                scoring.xclip_suffix = 0;
-                scoring.yclip_prefix = 0;
-                scoring.yclip_suffix = 0;
-                aligner
-            };
 
             std::thread::spawn(move || {
                 let target_seq = TargetSeq::new(&target_name, &target_seq);
@@ -480,8 +547,7 @@ pub fn run(opts: &Opts) -> Result<()> {
                                         record,
                                         &target_seq,
                                         &target_hash,
-                                        &mut ds_aligner,
-                                        &mut banded_aligner,
+                                        &mut aligners,
                                         opts.pre_align,
                                         opts.pre_align_min_score,
                                     )
@@ -490,8 +556,7 @@ pub fn run(opts: &Opts) -> Result<()> {
                                         record,
                                         &target_seq,
                                         &target_hash,
-                                        &mut ss_aligner,
-                                        &mut banded_aligner,
+                                        &mut aligners,
                                         opts.pre_align,
                                         opts.pre_align_min_score,
                                     )
@@ -537,6 +602,7 @@ pub fn run(opts: &Opts) -> Result<()> {
     writer.write_header(&header)?;
 
     loop {
+        let match_fn: MatchParams = MatchParams::new(opts.match_score, opts.mismatch_score);
         let scoring = Scoring::new(opts.gap_open, opts.gap_extend, opts.jump_score, match_fn);
         // Get a receiver for the alignment of a record
         if let Ok(receiver) = reader.to_output_rx.try_recv() {
