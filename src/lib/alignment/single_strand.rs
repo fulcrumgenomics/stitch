@@ -23,6 +23,7 @@ use crate::alignment::x_buffer::XBuffer;
 
 use super::constants::MIN_SCORE;
 use super::traceback::cell::Traceback;
+use super::traceback::traceback_single_stranded;
 use super::traceback::Cell;
 use super::traceback::TracebackCell;
 use super::traceback::TB_DEL;
@@ -629,124 +630,6 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         }
     }
 
-    fn do_traceback(&mut self, m: usize, n: usize) -> PairwiseAlignment {
-        let mut i = m;
-        let mut j = n;
-        let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(m);
-        let mut xstart: usize = 0usize;
-        let mut ystart: usize = 0usize;
-        let mut xend = m;
-        let mut yend = n;
-        let alignment_length = self.traceback.get(i, j).get_s_len();
-
-        let mut last_layer = self.traceback.get(i, j).get_s().tb;
-        loop {
-            let next_layer: u8;
-            match last_layer {
-                TB_START => break,
-                TB_INS => {
-                    operations.push(AlignmentOperation::Ins);
-                    next_layer = self.traceback.get(i, j).get_i().0;
-                    i -= 1;
-                }
-                TB_DEL => {
-                    operations.push(AlignmentOperation::Del);
-                    next_layer = self.traceback.get(i, j).get_d().0;
-                    j -= 1;
-                }
-                TB_MATCH | TB_SUBST => {
-                    if last_layer == TB_MATCH {
-                        operations.push(AlignmentOperation::Match);
-                    } else {
-                        operations.push(AlignmentOperation::Subst);
-                    }
-                    let s_value = self.traceback.get(i, j).get_s();
-                    assert!(!s_value.strand); // single stranded!
-                    if s_value.from as usize == i - 1 {
-                        next_layer = self.traceback.get(i - 1, j - 1).get_s().tb;
-                    } else {
-                        operations.push(AlignmentOperation::Xskip(i - 1));
-                        next_layer = self.traceback.get(s_value.from as usize, j - 1).get_s().tb;
-                    }
-                    i = s_value.from as usize;
-                    j -= 1;
-                }
-                TB_XCLIP_PREFIX => {
-                    next_layer = self.traceback.get(0, j).get_s().tb;
-                    // only add Xclip if there are only clip moves left, since we may have jumped!
-                    if next_layer == TB_START || next_layer == TB_YCLIP_PREFIX {
-                        operations.push(AlignmentOperation::Xclip(i));
-                        xstart = i;
-                    }
-                    i = 0;
-                }
-                TB_XCLIP_SUFFIX => {
-                    if operations.is_empty()
-                        || matches!(operations.first().unwrap(), AlignmentOperation::Yclip(_))
-                    {
-                        operations.push(AlignmentOperation::Xclip(self.Lx[j]));
-                        xend = i - self.Lx[j];
-                    }
-                    i -= self.Lx[j];
-                    next_layer = self.traceback.get(i, j).get_s().tb;
-                }
-                TB_YCLIP_PREFIX => {
-                    operations.push(AlignmentOperation::Yclip(j));
-                    ystart = j;
-                    j = 0;
-                    next_layer = self.traceback.get(i, 0).get_s().tb;
-                }
-                TB_YCLIP_SUFFIX => {
-                    operations.push(AlignmentOperation::Yclip(self.Ly[i]));
-                    let s_from = self.traceback.get(i, j).get_s().from as usize;
-                    j -= self.Ly[i];
-                    if s_from != i {
-                        operations.push(AlignmentOperation::Xskip(i));
-                        i = s_from;
-                    }
-                    yend = j;
-                    next_layer = self.traceback.get(i, j).get_s().tb;
-                }
-                TB_XJUMP => {
-                    let s_value = self.traceback.get(i, j).get_s();
-                    assert!(!s_value.strand); // single stranded!
-                    operations.push(AlignmentOperation::Xskip(i));
-                    next_layer = self.traceback.get(s_value.from as usize, j).get_s().tb;
-                    i = s_value.from as usize;
-                }
-                layer => panic!("Uknown move: {layer}!"),
-            }
-            last_layer = next_layer;
-        }
-
-        operations.reverse();
-        {
-            use self::AlignmentOperation::{Xclip, Xskip, Yclip};
-            if operations
-                .iter()
-                .all(|op| matches!(op, Xclip(_) | Yclip(_) | Xskip(_)))
-            {
-                xstart = 0;
-                xend = 0;
-                ystart = 0;
-                yend = 0;
-            }
-        }
-        PairwiseAlignment {
-            score: self.S[n % 2][m],
-            ystart,
-            xstart,
-            yend,
-            xend,
-            ylen: n,
-            xlen: m,
-            is_forward: true,
-            operations,
-            mode: AlignmentMode::Custom,
-            length: alignment_length as usize,
-        }
-    }
-
     /// The core function to compute the alignment
     ///
     /// # Arguments
@@ -766,7 +649,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             self.init_column(j, curr, m, n);
 
             // Initiliaze the jump buffers
-            self.x_buffer.fill(m, prev, &self.S, &self.scoring);
+            self.x_buffer.fill(m, j - 1, &self.S, &self.scoring);
 
             // Fill the column
             self.fill_column(x, y, m, n, j, prev, curr);
@@ -774,7 +657,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
         self.fill_last_column_and_end_clipping(m, n);
 
-        self.do_traceback(m, n)
+        traceback_single_stranded(self, m, n)
     }
 
     /// Calculate global alignment of x against y.
@@ -1657,7 +1540,8 @@ pub mod tests {
         let y = s("ACGT");
         // disallows mismatches and gaps, but allows jumps
         let match_fn = MatchParams::new(1, -100_000);
-        let mut aligner = SingleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        let mut aligner: SingleStrandAligner<MatchParams> =
+            SingleStrandAligner::new(-100_000, -100_000, -1, match_fn);
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 0, 4, 0, 4, 4 - 1 - 1 - 1, "1=1J1=2j1=1J1=", 4);
     }
@@ -1749,5 +1633,15 @@ pub mod tests {
             "10=20j10=10J10=",
             30,
         );
+    }
+
+    #[rstest]
+    fn test_global_short_jumps() {
+        let x = s("AAGGCCTT");
+        let y = s("AACCGGTT");
+        let match_fn = MatchParams::new(1, -100_000);
+        let mut aligner = SingleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        let alignment = aligner.global(&x, &y);
+        assert_alignment(&alignment, 0, 8, 0, 8, 8 - 1 - 1 - 1, "2=2J2=4j2=2J2=", 8);
     }
 }

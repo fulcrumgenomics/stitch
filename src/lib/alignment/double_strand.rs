@@ -9,7 +9,9 @@ use crate::alignment::constants::AlignmentOperation;
 use crate::alignment::constants::DEFAULT_ALIGNER_CAPACITY;
 use crate::alignment::pairwise::PairwiseAlignment;
 use crate::alignment::single_strand::SingleStrandAligner;
+use crate::alignment::traceback::traceback_double_stranded;
 use bio::alignment::pairwise::MatchFunc;
+use bio::alignment::pairwise::MatchParams;
 use bio::utils::TextSlice;
 use std::i32;
 
@@ -189,108 +191,6 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         }
     }
 
-    fn do_traceback(&mut self, m: usize, n: usize) -> PairwiseAlignment {
-        let mut i = m;
-        let mut j = n;
-        let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(m);
-        let mut xstart: usize = 0usize;
-        let mut ystart: usize = 0usize;
-        let mut xend = m;
-        let mut yend = n;
-
-        let mut cur_is_forward: bool = self.forward.S[i][j] > self.reverse.S[i][j];
-        let cur_aligner = if cur_is_forward {
-            &self.forward
-        } else {
-            &self.reverse
-        };
-        let alignment_length = cur_aligner.traceback.get(i, j).get_s_len();
-
-        let mut last_layer = cur_aligner.traceback.get(i, j).get_s().tb;
-        loop {
-            let cur_aligner = if cur_is_forward {
-                &self.forward
-            } else {
-                &self.reverse
-            };
-            let next_layer: u8;
-            match last_layer {
-                TB_START => break,
-                TB_INS => {
-                    operations.push(AlignmentOperation::Ins);
-                    next_layer = cur_aligner.traceback.get(i, j).get_i().0;
-                    i -= 1;
-                }
-                TB_DEL => {
-                    operations.push(AlignmentOperation::Del);
-                    next_layer = cur_aligner.traceback.get(i, j).get_d().0;
-                    j -= 1;
-                }
-                TB_MATCH | TB_SUBST => {
-                    if last_layer == TB_MATCH {
-                        operations.push(AlignmentOperation::Match);
-                    } else {
-                        operations.push(AlignmentOperation::Subst);
-                    }
-                    let s_value = cur_aligner.traceback.get(i, j).get_s();
-                    let s_from = s_value.from as usize;
-                    if s_from != i - 1 {
-                        if s_value.strand {
-                            operations.push(AlignmentOperation::Xflip(s_from));
-                            cur_is_forward = !cur_is_forward;
-                        } else {
-                            operations.push(AlignmentOperation::Xskip(s_from));
-                        }
-                    }
-                    next_layer = cur_aligner.traceback.get(s_from, j - 1).get_s().tb;
-                    i = s_from;
-                    j -= 1;
-                }
-                TB_XCLIP_PREFIX => {
-                    operations.push(AlignmentOperation::Xclip(i));
-                    xstart = i;
-                    i = 0;
-                    next_layer = cur_aligner.traceback.get(0, j).get_s().tb;
-                }
-                TB_XCLIP_SUFFIX => {
-                    operations.push(AlignmentOperation::Xclip(cur_aligner.Lx[j]));
-                    i -= cur_aligner.Lx[j];
-                    xend = i;
-                    next_layer = cur_aligner.traceback.get(i, j).get_s().tb;
-                }
-                TB_YCLIP_PREFIX => {
-                    operations.push(AlignmentOperation::Yclip(j));
-                    ystart = j;
-                    j = 0;
-                    next_layer = cur_aligner.traceback.get(i, 0).get_s().tb;
-                }
-                TB_YCLIP_SUFFIX => {
-                    operations.push(AlignmentOperation::Yclip(cur_aligner.Ly[i]));
-                    j -= cur_aligner.Ly[i];
-                    yend = j;
-                    next_layer = cur_aligner.traceback.get(i, j).get_s().tb;
-                }
-                _ => panic!("Dint expect this!"),
-            }
-            last_layer = next_layer;
-        }
-
-        operations.reverse();
-        PairwiseAlignment {
-            score: cur_aligner.S[n % 2][m],
-            ystart,
-            xstart,
-            yend,
-            xend,
-            xlen: m,
-            ylen: n,
-            is_forward: cur_is_forward,
-            operations,
-            mode: AlignmentMode::Custom,
-            length: alignment_length as usize,
-        }
-    }
-
     fn fill_x_buffer_stranded(&mut self, m: usize) {
         for i in 0..=m {
             let fwd = self.forward.x_buffer.get(i);
@@ -336,10 +236,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
             // Initiliaze the jump buffers
             self.forward
                 .x_buffer
-                .fill(m, j, &self.forward.S, &self.forward.scoring);
+                .fill(m, j - 1, &self.forward.S, &self.forward.scoring);
             self.reverse
                 .x_buffer
-                .fill(m, j, &self.reverse.S, &self.reverse.scoring);
+                .fill(m, j - 1, &self.reverse.S, &self.reverse.scoring);
             self.fill_x_buffer_stranded(m);
 
             // Fill the column
@@ -351,7 +251,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.reverse.fill_last_column_and_end_clipping(m, n);
 
         // Traceback...
-        self.do_traceback(m, n)
+        traceback_double_stranded(&self.forward, &self.reverse, m, n)
     }
 
     /// Calculate global alignment of x against y.
@@ -525,5 +425,97 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
 
         alignment
+    }
+}
+
+impl Default for DoubleStrandAligner<MatchParams> {
+    fn default() -> Self {
+        let match_fn = || MatchParams::new(1, -1);
+        DoubleStrandAligner::new(-5, -1, -10, match_fn)
+    }
+}
+
+// Tests
+#[cfg(test)]
+pub mod tests {
+    use bio::alignment::pairwise::MatchParams;
+    use itertools::Itertools;
+    use rstest::rstest;
+
+    use crate::util::reverse_complement;
+
+    use super::{DoubleStrandAligner, PairwiseAlignment};
+
+    /// Upper-cases and remove display-related characters from a string.
+    fn s(bases: &str) -> Vec<u8> {
+        bases
+            .chars()
+            .filter(|base| *base != '-' && *base != ' ' && *base != '_')
+            .map(|base| base.to_ascii_uppercase() as u8)
+            .collect_vec()
+    }
+
+    fn assert_alignment(
+        alignment: &PairwiseAlignment,
+        xstart: usize,
+        xend: usize,
+        ystart: usize,
+        yend: usize,
+        score: i32,
+        is_forward: bool,
+        cigar: &str,
+        length: usize,
+    ) {
+        assert_eq!(alignment.xstart, xstart, "xstart {alignment}");
+        assert_eq!(alignment.xend, xend, "xend {alignment}");
+        assert_eq!(alignment.ystart, ystart, "ystart {alignment}");
+        assert_eq!(alignment.yend, yend, "yend {alignment}");
+        assert_eq!(alignment.score, score, "score {alignment}");
+        assert_eq!(alignment.is_forward, is_forward, "strand {alignment}");
+        assert_eq!(alignment.cigar(), cigar, "cigar {alignment}");
+        assert_eq!(alignment.length, length, "length {alignment}");
+    }
+
+    /// Identical sequences, all matches
+    #[rstest]
+    fn test_identical() {
+        let x = s("ACGTAACC");
+        let x_revcomp = reverse_complement(&x);
+        let y = s("ACGTAACC");
+        let mut aligner = DoubleStrandAligner::default();
+        let alignment = aligner.global(&x, &x_revcomp, &y);
+        assert_alignment(&alignment, 0, 8, 0, 8, 8, true, "8=", 8);
+    }
+
+    /// Identical sequences, all matches, reverse complemented
+    #[rstest]
+    fn test_identical_revcomp() {
+        let x = s("ACGTAACC");
+        let x_revcomp = reverse_complement(&x);
+        let y = reverse_complement(s("ACGTAACC"));
+        let mut aligner = DoubleStrandAligner::default();
+        let alignment = aligner.global(&x, &x_revcomp, &y);
+        assert_alignment(&alignment, 0, 8, 0, 8, 8, false, "8=", 8);
+    }
+
+    #[rstest]
+    fn test_fwd_to_fwd_jump() {
+        let x = s("AAGGCCTT");
+        let x_revcomp = reverse_complement(&x);
+        let y = s("AACCGGTT");
+        let match_fn = || MatchParams::new(1, -100_000);
+        let mut aligner = DoubleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        let alignment = aligner.global(&x, &x_revcomp, &y);
+        assert_alignment(
+            &alignment,
+            0,
+            8,
+            0,
+            8,
+            8 - 1 - 1 - 1,
+            true,
+            "2=2J2=4j2=2J2=",
+            8,
+        );
     }
 }
