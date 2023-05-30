@@ -48,7 +48,7 @@ impl SubAlignmentBuilder {
         op_len: usize,
         scoring: &Scoring<F>,
     ) -> Option<SubAlignment> {
-        return match op {
+        match op {
             AlignmentOperation::Match => {
                 self.score += scoring.match_fn.score(b'A', b'A') * (op_len as i32);
                 self.query_offset += op_len;
@@ -119,7 +119,7 @@ impl SubAlignmentBuilder {
             }
             AlignmentOperation::Xclip(_) => None, // Ignore
             _ => panic!("Unsupported operator: {op:?}"),
-        };
+        }
     }
 
     pub fn new(use_eq_and_x: bool) -> Self {
