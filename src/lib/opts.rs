@@ -88,7 +88,7 @@ pub struct Opts {
     #[clap(long, short = 'm', default_value = "local", display_order = 16)]
     pub mode: AlignmentMode,
 
-    #[clap(long, short = 'P', default_value = "querylength", display_order = 17)]
+    #[clap(long, short = 'P', default_value = "query-length", display_order = 17)]
     pub by_primary: ByPrimary,
 
     /// The compression level of the output BAM
