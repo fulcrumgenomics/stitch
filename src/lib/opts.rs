@@ -1,10 +1,17 @@
 use crate::alignment::constants::AlignmentMode;
 use crate::util::built_info;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use env_logger::Env;
 use std::path::PathBuf;
 
 pub static TOOL_NAME: &str = "fqvqc";
+
+#[derive(Default, Debug, PartialEq, Eq, Copy, Clone, ValueEnum)]
+pub enum ByPrimary {
+    #[default]
+    QueryLength,
+    Score,
+}
 
 /// Aligns stuff
 #[derive(Parser, Debug, Clone)]
@@ -81,8 +88,11 @@ pub struct Opts {
     #[clap(long, short = 'm', default_value = "local", display_order = 16)]
     pub mode: AlignmentMode,
 
+    #[clap(long, short = 'P', default_value = "querylength", display_order = 17)]
+    pub by_primary: ByPrimary,
+
     /// The compression level of the output BAM
-    #[clap(long, short = 'c', default_value = "0", display_order = 17)]
+    #[clap(long, short = 'c', default_value = "0", display_order = 18)]
     pub compression: u8,
 }
 

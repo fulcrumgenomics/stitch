@@ -5,6 +5,7 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
+pub mod aligners;
 pub mod constants;
 pub mod double_strand;
 pub mod pairwise;
