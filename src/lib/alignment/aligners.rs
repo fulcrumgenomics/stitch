@@ -1,6 +1,7 @@
 use anyhow::{ensure, Context, Result};
 use bio::alignment::pairwise::MatchFunc;
 
+use crate::alignment::sub_alignment::Cigar;
 use crate::opts::{ByPrimary, Opts};
 use crate::target_seq::{TargetHash, TargetSeq};
 use crate::util::reverse_complement;
@@ -22,7 +23,7 @@ use noodles::sam::record::data::field::tag::ALIGNMENT_HIT_COUNT;
 use noodles::sam::record::data::field::tag::ALIGNMENT_SCORE;
 use noodles::sam::record::data::field::tag::HIT_INDEX;
 use noodles::sam::record::data::field::tag::TOTAL_HIT_COUNT;
-use noodles::sam::record::Cigar;
+use noodles::sam::record::Cigar as SamCigar;
 use noodles::sam::record::Data;
 use noodles::sam::record::Flags;
 use noodles::sam::record::MappingQuality;
@@ -286,6 +287,7 @@ pub fn to_records<F: MatchFunc>(
     alt_score: Option<i32>,
     scoring: &Scoring<F>,
     by_primary: ByPrimary,
+    target_len: usize,
 ) -> Result<Vec<SamRecord>> {
     let name = header_to_name(fastq.head())?;
     let read_name: SamReadName = name.parse()?;
@@ -332,23 +334,35 @@ pub fn to_records<F: MatchFunc>(
                 *record.flags_mut() = new_flags;
 
                 let is_forward = is_fwd == sub.is_forward;
-                let (bases_vec, quals_vec) = match (is_forward, hard_clip && is_secondary) {
-                    (true, false) => (bases.to_vec(), quals.to_vec()),
+                let (bases_vec, quals_vec, cigar) = match (is_forward, hard_clip && is_secondary) {
+                    (true, false) => (bases.to_vec(), quals.to_vec(), sub.cigar.clone()),
                     (true, true) => (
                         bases[sub.query_start..sub.query_end].to_vec(),
                         quals[sub.query_start..sub.query_end].to_vec(),
+                        Cigar {
+                            elements: sub.cigar.elements.iter().rev().copied().collect(),
+                        },
                     ),
-                    (false, false) => {
-                        let bases = reverse_complement(bases);
-                        let quals = quals.iter().copied().rev().collect();
-                        (bases, quals)
-                    }
+                    (false, false) => (
+                        // TODO:  cigar needs to be reversed!
+                        reverse_complement(bases),
+                        quals.iter().copied().rev().collect(),
+                        Cigar {
+                            elements: sub.cigar.elements.iter().rev().copied().collect(),
+                        },
+                    ),
                     (false, true) => {
-                        let start = bases.len() - sub.query_end;
-                        let end = bases.len() - sub.query_start;
+                        // TODO:  cigar needs to be reversed!
                         (
-                            reverse_complement(bases[start..end].to_vec()),
-                            quals.iter().copied().rev().collect(),
+                            reverse_complement(bases[sub.query_start..sub.query_end].to_vec()),
+                            quals[sub.query_start..sub.query_end]
+                                .iter()
+                                .copied()
+                                .rev()
+                                .collect(),
+                            Cigar {
+                                elements: sub.cigar.elements.iter().rev().copied().collect(),
+                            },
                         )
                     }
                 };
@@ -361,21 +375,31 @@ pub fn to_records<F: MatchFunc>(
 
                 // cigar
                 let clip_str: &str = if hard_clip && is_secondary { "H" } else { "S" };
-                let mut cigar = String::new();
-                if sub.query_start > 0 {
-                    cigar.push_str(&format!("{}{}", sub.query_start, clip_str));
+                let mut cigar_str = String::new();
+                if is_forward && sub.query_start > 0 {
+                    cigar_str.push_str(&format!("{}{}", sub.query_start, clip_str));
+                } else if !is_forward && sub.query_end < bases.len() {
+                    cigar_str.push_str(&format!("{}{}", bases.len() - sub.query_end, clip_str));
                 }
-                cigar.push_str(&sub.cigar);
-                if sub.query_end < bases.len() {
-                    cigar.push_str(&format!("{}{}", bases.len() - sub.query_end, clip_str));
+                for elem in &cigar.elements {
+                    cigar_str.push_str(&format!("{}{}", elem.len, elem.op));
                 }
-                *record.cigar_mut() = Cigar::from_str(&cigar).unwrap();
+                if is_forward && sub.query_end < bases.len() {
+                    cigar_str.push_str(&format!("{}{}", bases.len() - sub.query_end, clip_str));
+                } else if !is_forward && sub.query_start > 0 {
+                    cigar_str.push_str(&format!("{}{}", sub.query_start, clip_str));
+                }
+                *record.cigar_mut() = SamCigar::from_str(&cigar_str).unwrap();
 
                 // target id
                 *record.reference_sequence_id_mut() = Some(0usize);
 
                 // target start
-                *record.alignment_start_mut() = Position::new(sub.target_start + 1);
+                if is_forward {
+                    *record.alignment_start_mut() = Position::new(sub.target_start + 1);
+                } else {
+                    *record.alignment_start_mut() = Position::new(target_len - sub.target_end + 1);
+                }
 
                 // mapping quality
                 // TODO: base this on the alt_score
@@ -432,7 +456,7 @@ pub fn to_records<F: MatchFunc>(
         *record.quality_scores_mut() = QualityScores::try_from(quals.to_vec()).unwrap();
 
         // cigar
-        *record.cigar_mut() = Cigar::default();
+        *record.cigar_mut() = SamCigar::default();
 
         // mapping quality
         *record.mapping_quality_mut() = MappingQuality::new(0);

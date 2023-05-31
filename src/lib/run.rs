@@ -190,6 +190,7 @@ pub fn run(opts: &Opts) -> Result<()> {
                     alt_score,
                     &scoring,
                     opts.by_primary,
+                    target_seq.len(),
                 )?;
                 for record in &records {
                     writer.write_record(&header, record)?;

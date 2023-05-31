@@ -12,8 +12,19 @@ pub struct SubAlignment {
     pub target_start: usize,
     pub target_end: usize,
     pub is_forward: bool,
-    pub cigar: String,
+    pub cigar: Cigar,
     pub score: i32,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Default)]
+pub struct Cigar {
+    pub elements: Vec<CigarElem>,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Default)]
+pub struct CigarElem {
+    pub op: char,
+    pub len: usize,
 }
 
 pub struct SubAlignmentBuilder {
@@ -22,7 +33,7 @@ pub struct SubAlignmentBuilder {
     mismatch_char: char,
     del_char: char,
     ins_char: char,
-    cigar: String,
+    elements: Vec<CigarElem>,
     query_start: usize,
     target_start: usize,
     query_offset: usize,
@@ -53,27 +64,38 @@ impl SubAlignmentBuilder {
                 self.score += scoring.match_fn.score(b'A', b'A') * (op_len as i32);
                 self.query_offset += op_len;
                 self.target_offset += op_len;
-                self.cigar.push_str(&format!("{op_len}{}", self.match_char));
+                self.elements.push(CigarElem {
+                    op: self.match_char,
+                    len: op_len,
+                });
                 None
             }
             AlignmentOperation::Subst => {
                 self.score += scoring.match_fn.score(b'A', b'C') * (op_len as i32);
                 self.query_offset += op_len;
                 self.target_offset += op_len;
-                self.cigar
-                    .push_str(&format!("{op_len}{}", self.mismatch_char));
+                self.elements.push(CigarElem {
+                    op: self.mismatch_char,
+                    len: op_len,
+                });
                 None
             }
             AlignmentOperation::Del => {
                 self.score += scoring.gap_open + (scoring.gap_extend * op_len as i32);
                 self.target_offset += op_len;
-                self.cigar.push_str(&format!("{op_len}{}", self.del_char));
+                self.elements.push(CigarElem {
+                    op: self.del_char,
+                    len: op_len,
+                });
                 None
             }
             AlignmentOperation::Ins => {
                 self.score += scoring.gap_open + (scoring.gap_extend * op_len as i32);
                 self.query_offset += op_len;
-                self.cigar.push_str(&format!("{op_len}{}", self.ins_char));
+                self.elements.push(CigarElem {
+                    op: self.ins_char,
+                    len: op_len,
+                });
                 None
             }
             AlignmentOperation::Xskip(new_query_start) => {
@@ -83,12 +105,14 @@ impl SubAlignmentBuilder {
                     target_start: self.target_start,
                     target_end: self.target_offset,
                     is_forward: self.is_forward,
-                    cigar: self.cigar.clone(),
+                    cigar: Cigar {
+                        elements: self.elements.clone(),
+                    },
                     score: self.score,
                 };
 
                 // reset
-                self.cigar.clear();
+                self.elements.clear();
                 self.target_start = self.target_offset;
                 self.query_start = new_query_start;
                 self.query_offset = new_query_start;
@@ -103,12 +127,14 @@ impl SubAlignmentBuilder {
                     target_start: self.target_start,
                     target_end: self.target_offset,
                     is_forward: self.is_forward,
-                    cigar: self.cigar.clone(),
+                    cigar: Cigar {
+                        elements: self.elements.clone(),
+                    },
                     score: self.score,
                 };
 
                 // reset
-                self.cigar.clear();
+                self.elements.clear();
                 self.target_start = self.target_offset;
                 self.query_start = new_query_start;
                 self.query_offset = new_query_start;
@@ -117,8 +143,14 @@ impl SubAlignmentBuilder {
 
                 Some(alignment)
             }
-            AlignmentOperation::Xclip(_) => None, // Ignore
-            _ => panic!("Unsupported operator: {op:?}"),
+            AlignmentOperation::Yclip(_) => {
+                assert!(op_len == 1);
+                None
+            }
+            AlignmentOperation::Xclip(_) => {
+                assert!(op_len == 1);
+                None
+            }
         }
     }
 
@@ -129,7 +161,7 @@ impl SubAlignmentBuilder {
             mismatch_char: if use_eq_and_x { 'X' } else { 'M' },
             del_char: 'D',
             ins_char: 'I',
-            cigar: String::new(),
+            elements: Vec::new(),
             query_start: 0,
             target_start: 0,
             query_offset: 0,
@@ -139,19 +171,23 @@ impl SubAlignmentBuilder {
         }
     }
 
-    pub fn swap_cigar(cigar: &str) -> String {
-        cigar
-            .chars()
-            .map(|c| {
-                if c == 'I' {
-                    'D'
-                } else if c == 'D' {
-                    'I'
-                } else {
-                    c
-                }
+    pub fn swap_cigar(cigar: &Cigar) -> Cigar {
+        let elements = cigar
+            .elements
+            .iter()
+            .map(|elem| match elem.op {
+                'D' => CigarElem {
+                    op: 'I',
+                    len: elem.len,
+                },
+                'I' => CigarElem {
+                    op: 'D',
+                    len: elem.len,
+                },
+                _ => *elem,
             })
-            .collect()
+            .collect();
+        Cigar { elements }
     }
 
     pub fn build<F: MatchFunc>(
@@ -160,7 +196,7 @@ impl SubAlignmentBuilder {
         swap: bool,
         scoring: &Scoring<F>,
     ) -> Vec<SubAlignment> {
-        self.cigar.clear();
+        self.elements.clear();
         self.query_start = alignment.xstart;
         self.target_start = alignment.ystart;
         self.query_offset = self.query_start;
@@ -185,18 +221,20 @@ impl SubAlignmentBuilder {
         }
         if let Some(alignment) = self.add_op(last, op_len, scoring) {
             alignments.push(alignment);
+        } else {
+            let alignment = SubAlignment {
+                query_start: self.query_start,
+                query_end: self.query_offset,
+                target_start: self.target_start,
+                target_end: self.target_offset,
+                is_forward: self.is_forward,
+                cigar: Cigar {
+                    elements: self.elements.clone(),
+                },
+                score: self.score,
+            };
+            alignments.push(alignment);
         }
-
-        let alignment = SubAlignment {
-            query_start: self.query_start,
-            query_end: self.query_offset,
-            target_start: self.target_start,
-            target_end: self.target_offset,
-            is_forward: self.is_forward,
-            cigar: self.cigar.clone(),
-            score: self.score,
-        };
-        alignments.push(alignment);
 
         if swap {
             alignments
@@ -207,11 +245,7 @@ impl SubAlignmentBuilder {
                     target_start: a.query_start,
                     target_end: a.query_end,
                     is_forward: a.is_forward,
-                    cigar: if swap {
-                        Self::swap_cigar(&a.cigar)
-                    } else {
-                        a.cigar.clone()
-                    },
+                    cigar: Self::swap_cigar(&a.cigar),
                     score: a.score,
                 })
                 .collect_vec()
