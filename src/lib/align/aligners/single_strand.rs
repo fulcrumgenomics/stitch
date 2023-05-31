@@ -9,32 +9,32 @@ use std::cmp::max;
 use std::i32;
 use std::iter::repeat;
 
-use crate::alignment::constants::AlignmentMode;
-use crate::alignment::scoring::Scoring;
-use crate::alignment::traceback::TB_XJUMP;
+use crate::align::aligners::constants::AlignmentMode;
+use crate::align::scoring::Scoring;
+use crate::align::traceback::TB_XJUMP;
 use bio::alignment::pairwise::MatchFunc;
 use bio::alignment::pairwise::MatchParams;
 use bio::utils::TextSlice;
 
-use crate::alignment::constants::AlignmentOperation;
-use crate::alignment::constants::DEFAULT_ALIGNER_CAPACITY;
-use crate::alignment::pairwise::PairwiseAlignment;
-use crate::alignment::x_buffer::XBuffer;
+use crate::align::aligners::constants::AlignmentOperation;
+use crate::align::aligners::constants::DEFAULT_ALIGNER_CAPACITY;
+use crate::align::aligners::x_buffer::XBuffer;
+use crate::align::alignment::Alignment;
 
 use super::constants::MIN_SCORE;
-use super::traceback::cell::Traceback;
-use super::traceback::traceback_single_stranded;
-use super::traceback::Cell;
-use super::traceback::TracebackCell;
-use super::traceback::TB_DEL;
-use super::traceback::TB_INS;
-use super::traceback::TB_MATCH;
-use super::traceback::TB_START;
-use super::traceback::TB_SUBST;
-use super::traceback::TB_XCLIP_PREFIX;
-use super::traceback::TB_XCLIP_SUFFIX;
-use super::traceback::TB_YCLIP_PREFIX;
-use super::traceback::TB_YCLIP_SUFFIX;
+use crate::align::traceback::cell::Traceback;
+use crate::align::traceback::traceback_single_stranded;
+use crate::align::traceback::Cell;
+use crate::align::traceback::TracebackCell;
+use crate::align::traceback::TB_DEL;
+use crate::align::traceback::TB_INS;
+use crate::align::traceback::TB_MATCH;
+use crate::align::traceback::TB_START;
+use crate::align::traceback::TB_SUBST;
+use crate::align::traceback::TB_XCLIP_PREFIX;
+use crate::align::traceback::TB_XCLIP_SUFFIX;
+use crate::align::traceback::TB_YCLIP_PREFIX;
+use crate::align::traceback::TB_YCLIP_SUFFIX;
 
 /// A generalized Smith-Waterman aligner, allowing for the alignment to jump forward
 /// (or backward) in `x` (on the same strand).
@@ -584,6 +584,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     /// # Arguments
     ///
     /// * `scoring` - the scoring struct (see bio::alignment::pairwise::Scoring)
+    #[allow(dead_code)]
     pub fn with_scoring(scoring: Scoring<F>) -> Self {
         SingleStrandAligner::with_capacity_and_scoring(
             DEFAULT_ALIGNER_CAPACITY,
@@ -633,33 +634,13 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         }
     }
 
-    /// Computes the alignment based on mode.
-    ///
-    /// # Arguments
-    ///
-    /// * `x` - Textslice
-    /// * `y` - Textslice
-    pub fn align(
-        &mut self,
-        x: TextSlice<'_>,
-        y: TextSlice<'_>,
-        mode: AlignmentMode,
-    ) -> PairwiseAlignment {
-        match mode {
-            AlignmentMode::Global => self.global(x, y),
-            AlignmentMode::Semiglobal => self.semiglobal(x, y),
-            AlignmentMode::Local => self.local(x, y),
-            AlignmentMode::Custom => self.custom(x, y),
-        }
-    }
-
     /// The core function to compute the alignment
     ///
     /// # Arguments
     ///
     /// * `x` - Textslice
     /// * `y` - Textslice
-    pub fn custom(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
+    pub fn custom(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> Alignment {
         let (m, n) = (x.len(), y.len());
 
         self.init_matrices(m, n);
@@ -684,7 +665,8 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     }
 
     /// Calculate global alignment of x against y.
-    pub fn global(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
+    #[allow(dead_code)]
+    pub fn global(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> Alignment {
         // Store the current clip penalties
         let clip_penalties = [
             self.scoring.xclip_prefix,
@@ -713,7 +695,8 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     }
 
     /// Calculate semiglobal alignment of x against y (x is global, y is local).
-    pub fn semiglobal(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
+    #[allow(dead_code)]
+    pub fn semiglobal(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> Alignment {
         // Store the current clip penalties
         let clip_penalties = [
             self.scoring.xclip_prefix,
@@ -750,7 +733,8 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     }
 
     /// Calculate local alignment of x against y.
-    pub fn local(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> PairwiseAlignment {
+    #[allow(dead_code)]
+    pub fn local(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> Alignment {
         // Store the current clip penalties
         let clip_penalties = [
             self.scoring.xclip_prefix,
@@ -794,7 +778,7 @@ pub mod tests {
     use itertools::Itertools;
     use rstest::rstest;
 
-    use crate::alignment::pairwise::PairwiseAlignment;
+    use crate::align::alignment::Alignment;
 
     use super::SingleStrandAligner;
 
@@ -808,7 +792,7 @@ pub mod tests {
     }
 
     fn assert_alignment(
-        alignment: &PairwiseAlignment,
+        alignment: &Alignment,
         xstart: usize,
         xend: usize,
         ystart: usize,

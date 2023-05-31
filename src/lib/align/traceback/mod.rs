@@ -1,12 +1,13 @@
+use super::{
+    aligners::{
+        constants::{AlignmentMode, AlignmentOperation},
+        single_strand::SingleStrandAligner,
+    },
+    alignment::Alignment,
+};
 use bio::alignment::pairwise::MatchFunc;
 
-use super::{
-    constants::{AlignmentMode, AlignmentOperation},
-    pairwise::PairwiseAlignment,
-    single_strand::SingleStrandAligner,
-};
-
-pub mod cell;
+pub(crate) mod cell;
 
 #[derive(Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct SValue {
@@ -63,7 +64,7 @@ pub fn traceback_single_stranded<F: MatchFunc>(
     forward: &SingleStrandAligner<F>,
     m: usize,
     n: usize,
-) -> PairwiseAlignment {
+) -> Alignment {
     traceback_double_stranded(forward, forward, m, n)
 }
 
@@ -72,7 +73,7 @@ pub fn traceback_double_stranded<F: MatchFunc>(
     reverse: &SingleStrandAligner<F>,
     m: usize,
     n: usize,
-) -> PairwiseAlignment {
+) -> Alignment {
     let mut i = m;
     let mut j = n;
     let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(m);
@@ -203,7 +204,7 @@ pub fn traceback_double_stranded<F: MatchFunc>(
             yend = 0;
         }
     }
-    PairwiseAlignment {
+    Alignment {
         score,
         ystart,
         xstart,

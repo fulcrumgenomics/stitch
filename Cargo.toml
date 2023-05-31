@@ -7,7 +7,7 @@ edition = "2021"
 
 [[bin]]
 name = "fqcv"
-path = "src/main.rs"
+path = "src/bin/main.rs"
 
 [lib]
 name = "fqcv_lib"
@@ -21,6 +21,7 @@ anyhow = "1.0.71"
 bio = "1.1.0"
 cfg-if = "1.0.0"
 clap = { version = "4.2.7", features = ["derive"] }
+enum_dispatch = "0.3.11"
 env_logger = "0.10.0"
 fgoxide = "0.3.0"
 flate2 = "1.0.26"

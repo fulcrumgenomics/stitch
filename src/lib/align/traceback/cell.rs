@@ -2,8 +2,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::Cell;
-use super::TracebackCell;
 use super::TB_START;
+use crate::align::traceback::TracebackCell;
 
 /// Internal traceback.
 #[derive(Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ impl Traceback {
 
     pub fn init(&mut self, m: usize, n: usize) {
         self.matrix.clear();
-        let mut start = crate::alignment::traceback::default();
+        let mut start = crate::align::traceback::default();
         start.set_all(TB_START, 0);
         start.set_s_all(TB_START, 0, 0, false);
         // set every cell to start

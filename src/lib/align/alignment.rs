@@ -1,7 +1,6 @@
 use std::fmt;
 
-use crate::alignment::constants::AlignmentMode;
-use crate::alignment::constants::AlignmentOperation;
+use super::aligners::constants::{AlignmentMode, AlignmentOperation};
 
 /// We consider alignment between two sequences x and  y. x is the query or read sequence
 /// and y is the reference or template sequence. An alignment, consisting of a score,
@@ -11,7 +10,8 @@ use crate::alignment::constants::AlignmentOperation;
 /// of clipped regions are already encapsulated in the Alignment Operation.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Eq, PartialEq, Clone, Default)]
-pub struct PairwiseAlignment {
+pub struct Alignment {
+    // FIXME: rename to Alignment
     /// Smith-Waterman alignment score
     pub score: i32,
 
@@ -44,7 +44,8 @@ pub struct PairwiseAlignment {
     pub length: usize,
 }
 
-impl PairwiseAlignment {
+#[allow(dead_code)]
+impl Alignment {
     pub fn cigar(&self) -> String {
         let mut cigar = String::new();
         if self.operations.is_empty() {
@@ -59,12 +60,12 @@ impl PairwiseAlignment {
                 cigar.push_str(&format!(
                     "{}{}",
                     last_len,
-                    last_op.to_string(x_index as usize)
+                    last_op.as_string(x_index as usize)
                 ));
             }
             // Update
             if op.is_special() {
-                cigar.push_str(op.to_string(x_index as usize).as_str());
+                cigar.push_str(op.as_string(x_index as usize).as_str());
                 x_index += op.length_on_x(x_index);
                 last_op = op;
                 last_len = 0;
@@ -81,7 +82,7 @@ impl PairwiseAlignment {
             cigar.push_str(&format!(
                 "{}{}",
                 last_len,
-                last_op.to_string(x_index as usize)
+                last_op.as_string(x_index as usize)
             ));
         }
         cigar
@@ -93,6 +94,7 @@ impl PairwiseAlignment {
     /// query : ACGTGAACTGACT-ACTGTATGCG
     /// align : |||||  |||||| ||||||||.|
     /// target: ACGTG--CTGACTGACTGTATGGG
+    #[allow(dead_code)]
     pub fn padded_string(&self, query: &[u8], target: &[u8]) -> (String, String, String) {
         let mut query_buf: String = String::new();
         let mut align_buf: String = String::new();
@@ -155,7 +157,7 @@ impl PairwiseAlignment {
     }
 }
 
-impl fmt::Display for PairwiseAlignment {
+impl fmt::Display for Alignment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,

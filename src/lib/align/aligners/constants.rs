@@ -30,11 +30,11 @@ pub enum AlignmentOperation {
 
 impl AlignmentOperation {
     pub fn is_special(&self) -> bool {
-        use crate::alignment::constants::AlignmentOperation::{Xclip, Xflip, Xskip, Yclip};
+        use crate::align::aligners::constants::AlignmentOperation::{Xclip, Xflip, Xskip, Yclip};
         matches!(self, Xclip(_) | Yclip(_) | Xskip(_) | Xflip(_))
     }
 
-    pub fn to_string(&self, x_index: usize) -> String {
+    pub fn as_string(&self, x_index: usize) -> String {
         match *self {
             AlignmentOperation::Match => "=".to_string(),
             AlignmentOperation::Subst => "X".to_string(),
@@ -60,30 +60,26 @@ impl AlignmentOperation {
     }
 
     pub fn length_on_x(&self, x_index: i32) -> i32 {
-        use crate::alignment::constants::AlignmentOperation::{
+        use crate::align::aligners::constants::AlignmentOperation::{
             Del, Ins, Match, Subst, Xclip, Xflip, Xskip, Yclip,
         };
         match *self {
             Match | Subst | Ins => 1,
-            Del => 0,
+            Del | Yclip(_) => 0,
             Xclip(len) => len as i32,
-            Yclip(_) => 0,
-            Xskip(to_x_index) => to_x_index as i32 - x_index,
-            Xflip(to_x_index) => to_x_index as i32 - x_index,
+            Xskip(to_x_index) | Xflip(to_x_index) => to_x_index as i32 - x_index,
         }
     }
 
+    #[allow(dead_code)]
     pub fn length_on_y(&self) -> i32 {
-        use crate::alignment::constants::AlignmentOperation::{
+        use crate::align::aligners::constants::AlignmentOperation::{
             Del, Ins, Match, Subst, Xclip, Xflip, Xskip, Yclip,
         };
         match *self {
             Match | Subst | Del => 1,
-            Ins => 0,
-            Xclip(_) => 0,
             Yclip(len) => len as i32,
-            Xskip(_) => 0,
-            Xflip(_) => 0,
+            Ins | Xclip(_) | Xskip(_) | Xflip(_) => 0,
         }
     }
 }

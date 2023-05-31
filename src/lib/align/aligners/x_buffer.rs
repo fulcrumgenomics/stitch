@@ -12,7 +12,7 @@ use bio::alignment::pairwise::MatchFunc;
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::alignment::scoring::Scoring;
+use crate::align::scoring::Scoring;
 
 use super::constants::MIN_SCORE;
 

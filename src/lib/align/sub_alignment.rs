@@ -1,10 +1,14 @@
 use itertools::Itertools;
+use noodles::sam::record::cigar::Op;
+use noodles::sam::record::Cigar;
 
-use crate::alignment::constants::AlignmentOperation;
-use crate::alignment::pairwise::PairwiseAlignment;
-use crate::alignment::scoring::Scoring;
+use super::aligners::constants::AlignmentOperation;
+use super::alignment::Alignment;
+use super::scoring::Scoring;
 use bio::alignment::pairwise::MatchFunc;
+use noodles::sam::record::cigar::op::Kind;
 
+/// A pairwise alignment with no jumps allowed.
 #[derive(Debug, Eq, PartialEq, Clone, Default)]
 pub struct SubAlignment {
     pub query_start: usize,
@@ -16,24 +20,12 @@ pub struct SubAlignment {
     pub score: i32,
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Default)]
-pub struct Cigar {
-    pub elements: Vec<CigarElem>,
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, Copy, Default)]
-pub struct CigarElem {
-    pub op: char,
-    pub len: usize,
-}
-
+/// A builder for [`SubAlignment`]s.
 pub struct SubAlignmentBuilder {
     use_eq_and_x: bool,
-    match_char: char,
-    mismatch_char: char,
-    del_char: char,
-    ins_char: char,
-    elements: Vec<CigarElem>,
+    match_kind: Kind,
+    mismatch_kind: Kind,
+    elements: Vec<Op>,
     query_start: usize,
     target_start: usize,
     query_offset: usize,
@@ -64,38 +56,26 @@ impl SubAlignmentBuilder {
                 self.score += scoring.match_fn.score(b'A', b'A') * (op_len as i32);
                 self.query_offset += op_len;
                 self.target_offset += op_len;
-                self.elements.push(CigarElem {
-                    op: self.match_char,
-                    len: op_len,
-                });
+                self.elements.push(Op::new(self.match_kind, op_len));
                 None
             }
             AlignmentOperation::Subst => {
                 self.score += scoring.match_fn.score(b'A', b'C') * (op_len as i32);
                 self.query_offset += op_len;
                 self.target_offset += op_len;
-                self.elements.push(CigarElem {
-                    op: self.mismatch_char,
-                    len: op_len,
-                });
+                self.elements.push(Op::new(self.mismatch_kind, op_len));
                 None
             }
             AlignmentOperation::Del => {
                 self.score += scoring.gap_open + (scoring.gap_extend * op_len as i32);
                 self.target_offset += op_len;
-                self.elements.push(CigarElem {
-                    op: self.del_char,
-                    len: op_len,
-                });
+                self.elements.push(Op::new(Kind::Deletion, op_len));
                 None
             }
             AlignmentOperation::Ins => {
                 self.score += scoring.gap_open + (scoring.gap_extend * op_len as i32);
                 self.query_offset += op_len;
-                self.elements.push(CigarElem {
-                    op: self.ins_char,
-                    len: op_len,
-                });
+                self.elements.push(Op::new(Kind::Insertion, op_len));
                 None
             }
             AlignmentOperation::Xskip(new_query_start) => {
@@ -105,9 +85,7 @@ impl SubAlignmentBuilder {
                     target_start: self.target_start,
                     target_end: self.target_offset,
                     is_forward: self.is_forward,
-                    cigar: Cigar {
-                        elements: self.elements.clone(),
-                    },
+                    cigar: Cigar::try_from(self.elements.clone()).unwrap(),
                     score: self.score,
                 };
 
@@ -127,9 +105,7 @@ impl SubAlignmentBuilder {
                     target_start: self.target_start,
                     target_end: self.target_offset,
                     is_forward: self.is_forward,
-                    cigar: Cigar {
-                        elements: self.elements.clone(),
-                    },
+                    cigar: Cigar::try_from(self.elements.clone()).unwrap(),
                     score: self.score,
                 };
 
@@ -157,10 +133,16 @@ impl SubAlignmentBuilder {
     pub fn new(use_eq_and_x: bool) -> Self {
         Self {
             use_eq_and_x,
-            match_char: if use_eq_and_x { '=' } else { 'M' },
-            mismatch_char: if use_eq_and_x { 'X' } else { 'M' },
-            del_char: 'D',
-            ins_char: 'I',
+            match_kind: if use_eq_and_x {
+                Kind::SequenceMatch
+            } else {
+                Kind::Match
+            },
+            mismatch_kind: if use_eq_and_x {
+                Kind::SequenceMismatch
+            } else {
+                Kind::Match
+            },
             elements: Vec::new(),
             query_start: 0,
             target_start: 0,
@@ -172,27 +154,20 @@ impl SubAlignmentBuilder {
     }
 
     pub fn swap_cigar(cigar: &Cigar) -> Cigar {
-        let elements = cigar
-            .elements
+        let ops: Vec<Op> = cigar
             .iter()
-            .map(|elem| match elem.op {
-                'D' => CigarElem {
-                    op: 'I',
-                    len: elem.len,
-                },
-                'I' => CigarElem {
-                    op: 'D',
-                    len: elem.len,
-                },
-                _ => *elem,
+            .map(|op| match op.kind() {
+                Kind::Deletion => Op::new(Kind::Insertion, op.len()),
+                Kind::Insertion => Op::new(Kind::Deletion, op.len()),
+                _ => *op,
             })
             .collect();
-        Cigar { elements }
+        Cigar::try_from(ops).unwrap()
     }
 
     pub fn build<F: MatchFunc>(
         &mut self,
-        alignment: &PairwiseAlignment,
+        alignment: &Alignment,
         swap: bool,
         scoring: &Scoring<F>,
     ) -> Vec<SubAlignment> {
@@ -228,9 +203,7 @@ impl SubAlignmentBuilder {
                 target_start: self.target_start,
                 target_end: self.target_offset,
                 is_forward: self.is_forward,
-                cigar: Cigar {
-                    elements: self.elements.clone(),
-                },
+                cigar: Cigar::try_from(self.elements.clone()).unwrap(),
                 score: self.score,
             };
             alignments.push(alignment);

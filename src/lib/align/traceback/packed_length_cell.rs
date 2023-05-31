@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-use crate::alignment::traceback::TB_MAX;
+use crate::align::traceback::TB_MAX;
 
 use super::SValue;
 use super::TracebackCell;

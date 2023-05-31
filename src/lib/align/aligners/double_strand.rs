@@ -5,19 +5,19 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::alignment::constants::AlignmentOperation;
-use crate::alignment::constants::DEFAULT_ALIGNER_CAPACITY;
-use crate::alignment::pairwise::PairwiseAlignment;
-use crate::alignment::single_strand::SingleStrandAligner;
-use crate::alignment::traceback::traceback_double_stranded;
+use crate::align::aligners::constants::AlignmentOperation;
+use crate::align::aligners::constants::DEFAULT_ALIGNER_CAPACITY;
+use crate::align::aligners::single_strand::SingleStrandAligner;
+use crate::align::alignment::Alignment;
+use crate::align::traceback::traceback_double_stranded;
 use bio::alignment::pairwise::MatchFunc;
 use bio::alignment::pairwise::MatchParams;
 use bio::utils::TextSlice;
 use std::i32;
 
-use super::constants::AlignmentMode;
-use super::constants::MIN_SCORE;
-use super::scoring::Scoring;
+use crate::align::aligners::constants::AlignmentMode;
+use crate::align::aligners::constants::MIN_SCORE;
+use crate::align::scoring::Scoring;
 
 /// A generalized Smith-Waterman aligner, allowing for the alignment to jump forward
 /// (or backward) in `x` (on either same strand).
@@ -138,6 +138,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     /// # Arguments
     ///
     /// * `scoring` - the scoring struct (see bio::alignment::pairwise::Scoring)
+    #[allow(dead_code)]
     pub fn with_scoring(scoring_fwd: Scoring<F>, scoring_rev: Scoring<F>) -> Self {
         DoubleStrandAligner::with_capacity_and_scoring(
             DEFAULT_ALIGNER_CAPACITY,
@@ -184,27 +185,6 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         }
     }
 
-    /// Computes the alignment based on mode.
-    ///
-    /// # Arguments
-    ///
-    /// * `x` - Textslice
-    /// * `y` - Textslice
-    pub fn align(
-        &mut self,
-        x_forward: TextSlice<'_>,
-        x_revcomp: TextSlice<'_>,
-        y: TextSlice<'_>,
-        mode: AlignmentMode,
-    ) -> PairwiseAlignment {
-        match mode {
-            AlignmentMode::Global => self.global(x_forward, x_revcomp, y),
-            AlignmentMode::Semiglobal => self.semiglobal(x_forward, x_revcomp, y),
-            AlignmentMode::Local => self.local(x_forward, x_revcomp, y),
-            AlignmentMode::Custom => self.custom(x_forward, x_revcomp, y),
-        }
-    }
-
     /// The core function to compute the alignment
     ///
     /// # Arguments
@@ -216,7 +196,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         x_forward: TextSlice<'_>,
         x_revcomp: TextSlice<'_>,
         y: TextSlice<'_>,
-    ) -> PairwiseAlignment {
+    ) -> Alignment {
         let (m, n) = (x_forward.len(), y.len());
         assert!(x_forward.len() == x_revcomp.len(), "X length mismatch");
 
@@ -255,12 +235,13 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     }
 
     /// Calculate global alignment of x against y.
+    #[allow(dead_code)]
     pub fn global(
         &mut self,
         x_forward: TextSlice<'_>,
         x_revcomp: TextSlice<'_>,
         y: TextSlice<'_>,
-    ) -> PairwiseAlignment {
+    ) -> Alignment {
         // Store the current clip penalties
         let forward_clip_penalties = [
             self.forward.scoring.xclip_prefix,
@@ -302,12 +283,13 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     }
 
     /// Calculate semiglobal alignment of x against y (x is global, y is local).
+    #[allow(dead_code)]
     pub fn semiglobal(
         &mut self,
         x_forward: TextSlice<'_>,
         x_revcomp: TextSlice<'_>,
         y: TextSlice<'_>,
-    ) -> PairwiseAlignment {
+    ) -> Alignment {
         // Store the current clip penalties
         let forward_clip_penalties = [
             self.forward.scoring.xclip_prefix,
@@ -365,12 +347,13 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     }
 
     /// Calculate local alignment of x against y.
+    #[allow(dead_code)]
     pub fn local(
         &mut self,
         x_forward: TextSlice<'_>,
         x_revcomp: TextSlice<'_>,
         y: TextSlice<'_>,
-    ) -> PairwiseAlignment {
+    ) -> Alignment {
         // Store the current clip penalties
         let forward_clip_penalties = [
             self.forward.scoring.xclip_prefix,
@@ -442,9 +425,9 @@ pub mod tests {
     use itertools::Itertools;
     use rstest::rstest;
 
-    use crate::util::reverse_complement;
+    use crate::util::dna::reverse_complement;
 
-    use super::{DoubleStrandAligner, PairwiseAlignment};
+    use super::{Alignment, DoubleStrandAligner};
 
     /// Upper-cases and remove display-related characters from a string.
     fn s(bases: &str) -> Vec<u8> {
@@ -456,7 +439,7 @@ pub mod tests {
     }
 
     fn assert_alignment(
-        alignment: &PairwiseAlignment,
+        alignment: &Alignment,
         xstart: usize,
         xend: usize,
         ystart: usize,

@@ -1,29 +1,38 @@
+// Original Code was copied from:
+//     https://github.com/rust-bio/rust-bio/blob/master/src/alignment/pairwise/mod.rs
+// Copyright 2014-2015 Johannes Köster, Vadim Nazarov, Patrick Marks
+// Licensed under the MIT license (http://opensource.org/licenses/MIT)
+// This file may not be copied, modified, or distributed
+// except according to those terms.
+
 use anyhow::{ensure, Context, Result};
 use bio::alignment::pairwise::MatchFunc;
 
-use crate::alignment::sub_alignment::Cigar;
-use crate::opts::{Opts, PrimaryPickingStrategy};
-use crate::target_seq::{TargetHash, TargetSeq};
-use crate::util::reverse_complement;
+use crate::align::PrimaryPickingStrategy;
+use crate::commands::align::Align;
+use crate::util::dna::reverse_complement;
+use crate::util::target_seq::{TargetHash, TargetSeq};
 use itertools::{self, Itertools};
-use std::str::FromStr;
 
-use super::constants::{AlignmentMode, MIN_SCORE};
-use super::pairwise::PairwiseAlignment;
-use super::scoring::Scoring;
-use super::sub_alignment::SubAlignmentBuilder;
-use super::{double_strand::DoubleStrandAligner, single_strand::SingleStrandAligner};
+use crate::align::aligners::constants::{AlignmentMode, MIN_SCORE};
+use crate::align::aligners::{
+    double_strand::DoubleStrandAligner, single_strand::SingleStrandAligner,
+};
+use crate::align::alignment::Alignment;
+use crate::align::scoring::Scoring;
 use bio::alignment::pairwise::banded::Aligner as BandedAligner;
 use bio::alignment::pairwise::MatchParams;
 use bio::alignment::pairwise::Scoring as BioScoring;
 use bio::alignment::sparse::HashMapFx as BandedHashMapFx;
 use noodles::core::Position;
 use noodles::sam::alignment::Record as SamRecord;
+use noodles::sam::record::cigar::op::Kind;
+use noodles::sam::record::cigar::op::Op;
 use noodles::sam::record::data::field::tag::ALIGNMENT_HIT_COUNT;
 use noodles::sam::record::data::field::tag::ALIGNMENT_SCORE;
 use noodles::sam::record::data::field::tag::HIT_INDEX;
 use noodles::sam::record::data::field::tag::TOTAL_HIT_COUNT;
-use noodles::sam::record::Cigar as SamCigar;
+use noodles::sam::record::Cigar;
 use noodles::sam::record::Data;
 use noodles::sam::record::Flags;
 use noodles::sam::record::MappingQuality;
@@ -32,6 +41,13 @@ use noodles::sam::record::ReadName as SamReadName;
 use noodles::sam::record::Sequence;
 use seq_io::fastq::OwnedRecord as FastqOwnedRecord;
 use seq_io::fastq::Record as FastqRecord;
+
+use super::sub_alignment::SubAlignmentBuilder;
+
+pub(crate) mod constants;
+pub(crate) mod double_strand;
+pub(crate) mod single_strand;
+mod x_buffer;
 
 pub struct Aligners<F: MatchFunc> {
     banded: BandedAligner<F>,
@@ -45,7 +61,7 @@ impl Aligners<MatchParams> {
     }
 
     fn build_stranded_scoring(
-        opts: &Opts,
+        opts: &Align,
         xclip_prefix: i32,
         xclip_suffix: i32,
         yclip_prefix: i32,
@@ -64,7 +80,7 @@ impl Aligners<MatchParams> {
         scoring
     }
 
-    pub fn new(opts: &Opts, target_seq_len: usize) -> Aligners<MatchParams> {
+    pub fn new(opts: &Align, target_seq_len: usize) -> Aligners<MatchParams> {
         let (xclip_prefix, xclip_suffix, yclip_prefix, yclip_suffix) = match opts.mode {
             AlignmentMode::Local => (0, 0, 0, 0),
             AlignmentMode::Semiglobal => (MIN_SCORE, MIN_SCORE, 0, 0),
@@ -193,11 +209,7 @@ pub fn align_double_strand<F: MatchFunc>(
     aligners: &mut Aligners<F>,
     pre_align: bool,
     pre_align_min_score: i32,
-) -> (
-    FastqOwnedRecord,
-    Option<(PairwiseAlignment, bool)>,
-    Option<i32>,
-) {
+) -> (FastqOwnedRecord, Option<(Alignment, bool)>, Option<i32>) {
     let query = record.seq();
 
     let (banded_fwd, banded_revcomp, prealign_score) = maybe_prealign(
@@ -237,11 +249,7 @@ pub fn align_single_strand<F: MatchFunc>(
     aligners: &mut Aligners<F>,
     pre_align: bool,
     pre_align_min_score: i32,
-) -> (
-    FastqOwnedRecord,
-    Option<(PairwiseAlignment, bool)>,
-    Option<i32>,
-) {
+) -> (FastqOwnedRecord, Option<(Alignment, bool)>, Option<i32>) {
     let query = record.seq();
     let (banded_fwd, banded_revcomp, prealign_score) = maybe_prealign(
         query,
@@ -252,12 +260,11 @@ pub fn align_single_strand<F: MatchFunc>(
         None,
     );
 
-    let fwd: Option<PairwiseAlignment> =
-        if banded_fwd.map_or(true, |score| score >= pre_align_min_score) {
-            Some(aligners.single_strand.custom(&target_seq.fwd, query))
-        } else {
-            None
-        };
+    let fwd: Option<Alignment> = if banded_fwd.map_or(true, |score| score >= pre_align_min_score) {
+        Some(aligners.single_strand.custom(&target_seq.fwd, query))
+    } else {
+        None
+    };
     let revcomp = if banded_revcomp.map_or(true, |score| score >= pre_align_min_score) {
         Some(aligners.single_strand.custom(&target_seq.revcomp, query))
     } else {
@@ -289,7 +296,7 @@ fn header_to_name(header: &[u8]) -> Result<String> {
 
 pub fn to_records<F: MatchFunc>(
     fastq: &FastqOwnedRecord,
-    result: Option<(PairwiseAlignment, bool)>,
+    result: Option<(Alignment, bool)>,
     hard_clip: bool,
     use_eq_and_x: bool,
     alt_score: Option<i32>,
@@ -347,16 +354,14 @@ pub fn to_records<F: MatchFunc>(
                     (true, true) => (
                         bases[sub.query_start..sub.query_end].to_vec(),
                         quals[sub.query_start..sub.query_end].to_vec(),
-                        Cigar {
-                            elements: sub.cigar.elements.iter().rev().copied().collect(),
-                        },
+                        Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
+                            .unwrap(),
                     ),
                     (false, false) => (
                         reverse_complement(bases),
                         quals.iter().copied().rev().collect(),
-                        Cigar {
-                            elements: sub.cigar.elements.iter().rev().copied().collect(),
-                        },
+                        Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
+                            .unwrap(),
                     ),
                     (false, true) => (
                         reverse_complement(bases[sub.query_start..sub.query_end].to_vec()),
@@ -365,9 +370,8 @@ pub fn to_records<F: MatchFunc>(
                             .copied()
                             .rev()
                             .collect(),
-                        Cigar {
-                            elements: sub.cigar.elements.iter().rev().copied().collect(),
-                        },
+                        Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
+                            .unwrap(),
                     ),
                 };
 
@@ -378,22 +382,33 @@ pub fn to_records<F: MatchFunc>(
                 *record.quality_scores_mut() = QualityScores::try_from(quals_vec).unwrap();
 
                 // cigar
-                let clip_str: &str = if hard_clip && is_secondary { "H" } else { "S" };
-                let mut cigar_str = String::new();
-                if is_forward && sub.query_start > 0 {
-                    cigar_str.push_str(&format!("{}{}", sub.query_start, clip_str));
-                } else if !is_forward && sub.query_end < bases.len() {
-                    cigar_str.push_str(&format!("{}{}", bases.len() - sub.query_end, clip_str));
+                let clip_op = if hard_clip && is_secondary {
+                    Kind::HardClip
+                } else {
+                    Kind::SoftClip
+                };
+                let mut cigar_ops = Vec::new();
+                // Clip the start of the alignment
+                let clip_prefix_len = if is_forward {
+                    sub.query_start
+                } else {
+                    bases.len() - sub.query_end
+                };
+                if clip_prefix_len > 0 {
+                    cigar_ops.push(Op::new(clip_op, clip_prefix_len));
                 }
-                for elem in &cigar.elements {
-                    cigar_str.push_str(&format!("{}{}", elem.len, elem.op));
+                // Add the CIGAR from the alignment
+                cigar_ops.extend(cigar.iter());
+                // Clip the end of the alignment
+                let clip_suffix_len = if is_forward {
+                    bases.len() - sub.query_end
+                } else {
+                    sub.query_start
+                };
+                if clip_suffix_len > 0 {
+                    cigar_ops.push(Op::new(clip_op, clip_suffix_len));
                 }
-                if is_forward && sub.query_end < bases.len() {
-                    cigar_str.push_str(&format!("{}{}", bases.len() - sub.query_end, clip_str));
-                } else if !is_forward && sub.query_start > 0 {
-                    cigar_str.push_str(&format!("{}{}", sub.query_start, clip_str));
-                }
-                *record.cigar_mut() = SamCigar::from_str(&cigar_str).unwrap();
+                *record.cigar_mut() = Cigar::try_from(cigar_ops).unwrap();
 
                 // target id
                 *record.reference_sequence_id_mut() = Some(0usize);
@@ -460,7 +475,7 @@ pub fn to_records<F: MatchFunc>(
         *record.quality_scores_mut() = QualityScores::try_from(quals.to_vec()).unwrap();
 
         // cigar
-        *record.cigar_mut() = SamCigar::default();
+        *record.cigar_mut() = Cigar::default();
 
         // mapping quality
         *record.mapping_quality_mut() = MappingQuality::new(0);

@@ -1,60 +1,7 @@
-use crate::alignment::constants::MIN_SCORE;
 use bio::alignment::pairwise::MatchFunc;
 use serde::Serialize;
 
-// /// Trait required to instantiate a Scoring instance
-// pub trait MatchFunc {
-//     fn score(&self, a: u8, b: u8) -> i32;
-// }
-
-// /// A concrete data structure which implements trait MatchFunc with constant
-// /// match and mismatch scores
-// #[derive(
-//     Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize,
-// )]
-// pub struct MatchParams {
-//     pub match_score: i32,
-//     pub mismatch_score: i32,
-// }
-
-// impl MatchParams {
-//     /// Create new MatchParams instance with given match and mismatch scores
-//     ///
-//     /// # Arguments
-//     ///
-//     /// * `match_score` - the score for a match (should not be negative)
-//     /// * `mismatch_score` - the score for a mismatch (should not be positive)
-//     pub fn new(match_score: i32, mismatch_score: i32) -> Self {
-//         assert!(match_score >= 0, "match_score can't be negative");
-//         assert!(mismatch_score <= 0, "mismatch_score can't be positive");
-//         MatchParams {
-//             match_score,
-//             mismatch_score,
-//         }
-//     }
-// }
-
-// impl MatchFunc for MatchParams {
-//     #[inline]
-//     fn score(&self, a: u8, b: u8) -> i32 {
-//         if a == b {
-//             self.match_score
-//         } else {
-//             self.mismatch_score
-//         }
-//     }
-// }
-
-// /// The trait Matchfunc is also implemented for Fn(u8, u8) -> i32 so that Scoring
-// /// can be instantiated using closures and custom user defined functions
-// impl<F> MatchFunc for F
-// where
-//     F: Fn(u8, u8) -> i32,
-// {
-//     fn score(&self, a: u8, b: u8) -> i32 {
-//         (self)(a, b)
-//     }
-// }
+use crate::align::aligners::constants::MIN_SCORE;
 
 /// Details of scoring are encapsulated in this structure.
 ///
@@ -117,6 +64,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.xclip_suffix == -5);
     /// assert!(scoring.yclip_suffix == MIN_SCORE);
     /// ```
+    #[allow(dead_code)]
     pub fn xclip(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.xclip_prefix = penalty;
@@ -139,6 +87,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.xclip_suffix == MIN_SCORE);
     /// assert!(scoring.yclip_suffix == MIN_SCORE);
     /// ```
+    #[allow(dead_code)]
     pub fn xclip_prefix(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.xclip_prefix = penalty;
@@ -159,6 +108,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.xclip_suffix == -5);
     /// assert!(scoring.yclip_suffix == MIN_SCORE);
     /// ```
+    #[allow(dead_code)]
     pub fn xclip_suffix(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.xclip_suffix = penalty;
@@ -179,6 +129,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.xclip_suffix == MIN_SCORE);
     /// assert!(scoring.yclip_suffix == -5);
     /// ```
+    #[allow(dead_code)]
     pub fn yclip(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.yclip_prefix = penalty;
@@ -200,6 +151,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.xclip_suffix == MIN_SCORE);
     /// assert!(scoring.yclip_suffix == MIN_SCORE);
     /// ```
+    #[allow(dead_code)]
     pub fn yclip_prefix(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.yclip_prefix = penalty;
@@ -220,6 +172,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.xclip_suffix == MIN_SCORE);
     /// assert!(scoring.yclip_suffix == -5);
     /// ```
+    #[allow(dead_code)]
     pub fn yclip_suffix(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.yclip_suffix = penalty;

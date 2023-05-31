@@ -1,5 +1,3 @@
-use crate::alignment::pairwise::PairwiseAlignment;
-use crate::{is_fastq_path, is_gzip_path};
 use anyhow::{Context, Result};
 use flate2::bufread::MultiGzDecoder;
 use flume::{bounded, Receiver, Sender};
@@ -12,8 +10,14 @@ use std::{
     io::{BufReader, Read},
 };
 
+use crate::util::io::{is_fastq_path, is_gzip_path};
+
+use super::alignment::Alignment;
+
 /// 128 KB default buffer size, same as pigz.
 pub const GZ_BUFSIZE: usize = 64 * (1 << 10) * 2;
+
+/// The buffer size for reading FASTAs
 pub const BUFFER_SIZE: usize = 1024 * 1024;
 
 /// The number of FASTQ records to includ per chunk, scaled but the # of CPUS.
@@ -33,16 +37,19 @@ pub struct InputMessage {
     pub oneshot: Sender<OutputMessage>,
 }
 
-pub type OutputResult = (
-    FastqOwnedRecord,
-    Option<(PairwiseAlignment, bool)>,
-    Option<i32>,
-);
+/// The output result of a single pairwise alignment as a triple:
+/// 1. the FASTQ record that was aligned
+/// 2. None if no alignment was found, otherwise some tuple of pairwise alignment and the target
+///   strand to which the alignment was made.
+/// 3. The alignment score, if aligned.
+pub type OutputResult = (FastqOwnedRecord, Option<(Alignment, bool)>, Option<i32>);
 
+/// The container for a chunk of pairwise alignments, one per input FASTQ record.
 pub struct OutputMessage {
     pub results: Vec<OutputResult>,
 }
 
+/// A FASTQ reader that runs in its own thread and chunks reads to send to a pool of aligners.
 pub struct FastqThreadReader {
     /// The [`JoinHandle`] for the thread that is reading.
     pub handle: JoinHandle<Result<()>>,
@@ -53,6 +60,7 @@ pub struct FastqThreadReader {
 }
 
 impl FastqThreadReader {
+    /// Creates a new `FastqThreadReader` in a new thread.
     pub fn new(file: PathBuf, decompress: bool, threads: usize) -> Self {
         // Channel to send chunks of records to align
         let (to_align_tx, to_align_rx): (Sender<InputMessage>, Receiver<InputMessage>) =
