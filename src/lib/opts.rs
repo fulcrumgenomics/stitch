@@ -25,8 +25,8 @@ pub struct Opts {
     #[clap(long, short = 'r', display_order = 2)]
     pub ref_fasta: PathBuf,
 
-    /// The path to the referece vector/plasmid/construct FASTA sequence.
-    #[clap(long, short = 'd', default_value = "false", display_order = 2)]
+    /// Align to both strands of the reference simulataneously.
+    #[clap(long, short = 'd', default_value = "false", display_order = 3)]
     pub double_strand: bool,
 
     /// The number of threads to use.
