@@ -7,6 +7,7 @@ use crate::io::FastqThreadReader;
 use crate::io::OutputMessage;
 use crate::io::OutputResult;
 use crate::io::BUFFER_SIZE;
+use crate::io::READER_CHANNEL_NUM_CHUNKS;
 use crate::opts::Opts;
 use crate::target_seq::TargetSeq;
 use crate::util::built_info::VERSION;
@@ -81,7 +82,11 @@ pub fn run(opts: &Opts) -> Result<()> {
         .name("fqcv-progress")
         .noun("reads")
         .verb("Aligned")
-        .unit((125 * opts.threads).try_into().unwrap())
+        .unit(
+            (READER_CHANNEL_NUM_CHUNKS * opts.threads)
+                .try_into()
+                .unwrap(),
+        )
         .count_formatter(CountFormatterKind::Comma)
         .build();
 

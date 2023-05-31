@@ -2,7 +2,7 @@ use anyhow::{ensure, Context, Result};
 use bio::alignment::pairwise::MatchFunc;
 
 use crate::alignment::sub_alignment::Cigar;
-use crate::opts::{ByPrimary, Opts};
+use crate::opts::{Opts, PrimaryPickingStrategy};
 use crate::target_seq::{TargetHash, TargetSeq};
 use crate::util::reverse_complement;
 use itertools::{self, Itertools};
@@ -72,19 +72,20 @@ impl Aligners<MatchParams> {
             AlignmentMode::Custom => panic!("Custom alignment mode not supported"), // TODO: move to main run method
         };
 
+        // Banded alignment is always local since the goal is to find at leaset some minimal scoring
+        // local alignment.
         let banded_scoring = {
             let mut scoring = BioScoring::new(
                 opts.gap_open,
                 opts.gap_extend,
                 Self::build_match_fn(opts.match_score, opts.mismatch_score),
             );
-            scoring.xclip_prefix = xclip_prefix;
-            scoring.xclip_suffix = xclip_suffix;
-            scoring.yclip_prefix = yclip_prefix;
-            scoring.yclip_suffix = yclip_suffix;
+            scoring.xclip_prefix = 0;
+            scoring.xclip_suffix = 0;
+            scoring.yclip_prefix = 0;
+            scoring.yclip_suffix = 0;
             scoring
         };
-
         let banded = BandedAligner::with_capacity_and_scoring(
             10000,
             target_seq_len,
@@ -92,6 +93,7 @@ impl Aligners<MatchParams> {
             opts.k,
             opts.w,
         );
+
         let single_strand = SingleStrandAligner::with_capacity_and_scoring(
             10000,
             target_seq_len,
@@ -153,7 +155,9 @@ fn maybe_prealign<F: MatchFunc>(
     target_hash: &TargetHash,
     banded_aligner: &mut BandedAligner<F>,
     pre_align: bool,
+    pre_align_min_score: Option<i32>,
 ) -> (Option<i32>, Option<i32>, Option<i32>) {
+    let min_score = pre_align_min_score.unwrap_or(MIN_SCORE);
     let (banded_fwd, banded_revcomp, prealign_score) = {
         if pre_align {
             let banded_fwd = align_local_banded(
@@ -162,14 +166,18 @@ fn maybe_prealign<F: MatchFunc>(
                 banded_aligner,
                 &target_hash.fwd_hash,
             );
-            let banded_revcomp = align_local_banded(
-                query,
-                &target_seq.revcomp,
-                banded_aligner,
-                &target_hash.revcomp_hash,
-            );
-            let prealign_score = std::cmp::max(banded_fwd, banded_revcomp);
-            (Some(banded_fwd), Some(banded_revcomp), Some(prealign_score))
+            if banded_fwd >= min_score {
+                (Some(banded_fwd), None, Some(banded_fwd))
+            } else {
+                let banded_revcomp = align_local_banded(
+                    query,
+                    &target_seq.revcomp,
+                    banded_aligner,
+                    &target_hash.revcomp_hash,
+                );
+                let prealign_score = std::cmp::max(banded_fwd, banded_revcomp);
+                (Some(banded_fwd), Some(banded_revcomp), Some(prealign_score))
+            }
         } else {
             (None, None, None)
         }
@@ -198,6 +206,7 @@ pub fn align_double_strand<F: MatchFunc>(
         target_hash,
         &mut aligners.banded,
         pre_align,
+        Some(pre_align_min_score),
     );
 
     let alignment = {
@@ -242,6 +251,7 @@ pub fn align_single_strand<F: MatchFunc>(
         target_hash,
         &mut aligners.banded,
         pre_align,
+        None,
     );
 
     let fwd: Option<PairwiseAlignment> =
@@ -286,7 +296,7 @@ pub fn to_records<F: MatchFunc>(
     use_eq_and_x: bool,
     alt_score: Option<i32>,
     scoring: &Scoring<F>,
-    by_primary: ByPrimary,
+    by_primary: PrimaryPickingStrategy,
     target_len: usize,
 ) -> Result<Vec<SamRecord>> {
     let name = header_to_name(fastq.head())?;
@@ -301,12 +311,12 @@ pub fn to_records<F: MatchFunc>(
         ensure!(!subs.is_empty());
 
         let primary_index = match by_primary {
-            ByPrimary::QueryLength => subs
+            PrimaryPickingStrategy::QueryLength => subs
                 .iter()
                 .enumerate()
                 .max_by_key(|(_, alignment)| alignment.score)
                 .map_or(0, |(index, _)| index),
-            ByPrimary::Score => subs
+            PrimaryPickingStrategy::Score => subs
                 .iter()
                 .enumerate()
                 .max_by_key(|(_, alignment)| alignment.query_end - alignment.query_start)

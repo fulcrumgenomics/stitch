@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub static TOOL_NAME: &str = "fqvqc";
 
 #[derive(Default, Debug, PartialEq, Eq, Copy, Clone, ValueEnum)]
-pub enum ByPrimary {
+pub enum PrimaryPickingStrategy {
     #[default]
     QueryLength,
     Score,
@@ -50,7 +50,13 @@ pub struct Opts {
     pub w: usize,
 
     /// Pre-align with banded local alignment.
-    #[clap(long, short = 's', default_value = "100", display_order = 8)]
+    #[clap(
+        long,
+        short = 's',
+        default_value = "100",
+        allow_hyphen_values = true,
+        display_order = 8
+    )]
     pub pre_align_min_score: i32,
 
     /// Use soft-clipping for all alignments, otherwise secondary alignemnts will use hard-clipping
@@ -66,19 +72,43 @@ pub struct Opts {
     pub match_score: i32,
 
     /// Score for a sequence mismatch (must be negative)
-    #[clap(long, short = 'B', default_value = "-1", display_order = 12)]
+    #[clap(
+        long,
+        short = 'B',
+        default_value = "-1",
+        allow_hyphen_values = true,
+        display_order = 12
+    )]
     pub mismatch_score: i32,
 
     /// Score for a gap open (must be negative)
-    #[clap(long, short = 'O', default_value = "-5", display_order = 13)]
+    #[clap(
+        long,
+        short = 'O',
+        default_value = "-5",
+        allow_hyphen_values = true,
+        display_order = 13
+    )]
     pub gap_open: i32,
 
     /// Score for a gap extend (must be negative); a gap of size k cost '{-O} + {-E}*k'
-    #[clap(long, short = 'E', default_value = "-1", display_order = 14)]
+    #[clap(
+        long,
+        short = 'E',
+        default_value = "-1",
+        allow_hyphen_values = true,
+        display_order = 14
+    )]
     pub gap_extend: i32,
 
     /// Score for a target jump (must be negative)
-    #[clap(long, short = 'J', default_value = "-10", display_order = 15)]
+    #[clap(
+        long,
+        short = 'J',
+        default_value = "-10",
+        allow_hyphen_values = true,
+        display_order = 15
+    )]
     pub jump_score: i32,
 
     /// The alignment mode
@@ -89,7 +119,7 @@ pub struct Opts {
     pub mode: AlignmentMode,
 
     #[clap(long, short = 'P', default_value = "query-length", display_order = 17)]
-    pub by_primary: ByPrimary,
+    pub by_primary: PrimaryPickingStrategy,
 
     /// The compression level of the output BAM
     #[clap(long, short = 'c', default_value = "0", display_order = 18)]
