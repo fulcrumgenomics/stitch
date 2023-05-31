@@ -224,10 +224,8 @@ pub fn align_double_strand<F: MatchFunc>(
     };
 
     match alignment {
-        Some(result) => {
-            let is_forward = result.is_forward;
-            (record, Some((result, is_forward)), prealign_score)
-        }
+        // NB: we always align to the "forward strand"
+        Some(result) => (record, Some((result, true)), prealign_score),
         None => (record, None, prealign_score),
     }
 }
@@ -329,13 +327,14 @@ pub fn to_records<F: MatchFunc>(
             .map(|(index, sub)| {
                 let is_secondary = index != primary_index;
                 let mut record = SamRecord::default();
+                let is_forward: bool = is_fwd == sub.is_forward;
 
                 // read name
                 *record.read_name_mut() = Some(read_name.clone());
 
                 // flags
                 let mut new_flags = Flags::default();
-                if !is_fwd {
+                if !is_forward {
                     new_flags.insert(Flags::REVERSE_COMPLEMENTED);
                 }
                 if is_secondary {
@@ -343,7 +342,6 @@ pub fn to_records<F: MatchFunc>(
                 }
                 *record.flags_mut() = new_flags;
 
-                let is_forward = is_fwd == sub.is_forward;
                 let (bases_vec, quals_vec, cigar) = match (is_forward, hard_clip && is_secondary) {
                     (true, false) => (bases.to_vec(), quals.to_vec(), sub.cigar.clone()),
                     (true, true) => (
@@ -354,27 +352,23 @@ pub fn to_records<F: MatchFunc>(
                         },
                     ),
                     (false, false) => (
-                        // TODO:  cigar needs to be reversed!
                         reverse_complement(bases),
                         quals.iter().copied().rev().collect(),
                         Cigar {
                             elements: sub.cigar.elements.iter().rev().copied().collect(),
                         },
                     ),
-                    (false, true) => {
-                        // TODO:  cigar needs to be reversed!
-                        (
-                            reverse_complement(bases[sub.query_start..sub.query_end].to_vec()),
-                            quals[sub.query_start..sub.query_end]
-                                .iter()
-                                .copied()
-                                .rev()
-                                .collect(),
-                            Cigar {
-                                elements: sub.cigar.elements.iter().rev().copied().collect(),
-                            },
-                        )
-                    }
+                    (false, true) => (
+                        reverse_complement(bases[sub.query_start..sub.query_end].to_vec()),
+                        quals[sub.query_start..sub.query_end]
+                            .iter()
+                            .copied()
+                            .rev()
+                            .collect(),
+                        Cigar {
+                            elements: sub.cigar.elements.iter().rev().copied().collect(),
+                        },
+                    ),
                 };
 
                 // bases
