@@ -5,19 +5,23 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-
 [[bin]]
 name = "fqcv"
-path = "src/main.rs"
+path = "src/bin/main.rs"
 
 [lib]
 name = "fqcv_lib"
 path = "src/lib/mod.rs"
 
+[features]
+low_mem = []
+
 [dependencies]
 anyhow = "1.0.71"
 bio = "1.1.0"
+cfg-if = "1.0.0"
 clap = { version = "4.2.7", features = ["derive"] }
+enum_dispatch = "0.3.11"
 env_logger = "0.10.0"
 fgoxide = "0.3.0"
 flate2 = "1.0.26"
@@ -38,3 +42,7 @@ built = { version = "0.6.0", features = ["git2"] }
 
 [profile.release]
 debug = true
+
+[dev-dependencies]
+rstest = "0.17.0"
+tempfile = "3.5"
