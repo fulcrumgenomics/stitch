@@ -161,7 +161,7 @@ impl fmt::Display for Alignment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "x-span: {}-{} y=span: {}-{} score: {} strand: {} cigar: {} aln-len: {}",
+            "x-span: {}-{} y-span: {}-{} score: {} strand: {} cigar: {} aln-len: {}",
             self.xstart,
             self.xend,
             self.ystart,

@@ -209,7 +209,8 @@ pub struct Align {
 
     /// The alignment mode:
     /// - Local: aligns a sub-sequence of the read versus a sub-sequence of the reference.
-    /// - Semiglobal: aligns the full read versus a sub-sequence of the reference.
+    /// - QueryLocal: aligns a sub-sequence of the read versus the full reference.
+    /// - TargetLocal: aligns the full read versus a sub-sequence of the reference.
     /// - Global: aligns the full read versus the full reference.
     #[clap(
         long,
@@ -231,6 +232,11 @@ pub struct Align {
         verbatim_doc_comment
     )]
     pub pick_primary: PrimaryPickingStrategy,
+
+    /// True to treat the input target as circular.  This allows the alignment to jump back to the
+    /// start of the target/reference at no cost.
+    #[clap(long, short = 'C', default_value = "false", display_order = 19)]
+    pub circular: bool,
 
     /// The compression level of the output BAM
     #[clap(long, short = 'c', default_value = "0", display_order = 20)]

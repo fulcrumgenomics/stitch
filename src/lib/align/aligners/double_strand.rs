@@ -185,6 +185,12 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         }
     }
 
+    /// Sets the value for treating x as circular, allowing for a zero-cost jump to the start of x.
+    pub fn set_circular(&mut self, circular: bool) {
+        self.forward.set_circular(circular);
+        self.reverse.set_circular(circular);
+    }
+
     /// The core function to compute the alignment
     ///
     /// # Arguments
@@ -284,7 +290,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
 
     /// Calculate semiglobal alignment of x against y (x is global, y is local).
     #[allow(dead_code)]
-    pub fn semiglobal(
+    pub fn querylocal(
         &mut self,
         x_forward: TextSlice<'_>,
         x_revcomp: TextSlice<'_>,
@@ -316,7 +322,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
 
         // Compute the alignment
         let mut alignment = self.custom(x_forward, x_revcomp, y);
-        alignment.mode = AlignmentMode::Semiglobal;
+        alignment.mode = AlignmentMode::QueryLocal;
 
         // Filter out Xclip and Yclip from alignment.operations
         {
@@ -334,6 +340,69 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
 
         // Set the clip penalties to the original values
 
+        self.forward.scoring.xclip_prefix = forward_clip_penalties[0];
+        self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
+        self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
+        self.forward.scoring.yclip_suffix = forward_clip_penalties[3];
+        self.reverse.scoring.xclip_prefix = reverse_clip_penalties[0];
+        self.reverse.scoring.xclip_suffix = reverse_clip_penalties[1];
+        self.reverse.scoring.yclip_prefix = reverse_clip_penalties[2];
+        self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
+
+        alignment
+    }
+
+    /// Calculate semiglobal alignment of x against y (x is global, y is local).
+    #[allow(dead_code)]
+    pub fn targetlocal(
+        &mut self,
+        x_forward: TextSlice<'_>,
+        x_revcomp: TextSlice<'_>,
+        y: TextSlice<'_>,
+    ) -> Alignment {
+        // Store the current clip penalties
+        let forward_clip_penalties = [
+            self.forward.scoring.xclip_prefix,
+            self.forward.scoring.xclip_suffix,
+            self.forward.scoring.yclip_prefix,
+            self.forward.scoring.yclip_suffix,
+        ];
+        let reverse_clip_penalties = [
+            self.reverse.scoring.xclip_prefix,
+            self.reverse.scoring.xclip_suffix,
+            self.reverse.scoring.yclip_prefix,
+            self.reverse.scoring.yclip_suffix,
+        ];
+
+        // Temporarily Over-write the clip penalties
+        self.forward.scoring.xclip_prefix = 0;
+        self.forward.scoring.xclip_suffix = 0;
+        self.forward.scoring.yclip_prefix = MIN_SCORE;
+        self.forward.scoring.yclip_suffix = MIN_SCORE;
+        self.reverse.scoring.xclip_prefix = 0;
+        self.reverse.scoring.xclip_suffix = 0;
+        self.reverse.scoring.yclip_prefix = MIN_SCORE;
+        self.reverse.scoring.yclip_suffix = MIN_SCORE;
+
+        // Compute the alignment
+        let mut alignment = self.custom(x_forward, x_revcomp, y);
+        alignment.mode = AlignmentMode::TargetLocal;
+
+        // Filter out Xclip and Yclip from alignment.operations
+        {
+            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xflip, Xskip};
+            alignment.operations.retain(|x| {
+                *x == Match
+                    || *x == Subst
+                    || *x == Ins
+                    || *x == Del
+                    || matches!(*x, Xclip(_))
+                    || matches!(*x, Xskip(_))
+                    || matches!(*x, Xflip(_))
+            });
+        }
+
+        // Set the clip penalties to the original values
         self.forward.scoring.xclip_prefix = forward_clip_penalties[0];
         self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
         self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
