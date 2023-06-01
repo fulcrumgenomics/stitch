@@ -10,7 +10,6 @@ use std::i32;
 use std::iter::repeat;
 
 use crate::align::aligners::constants::AlignmentMode;
-use crate::align::aligners::x_buffer::XBufferValue;
 use crate::align::scoring::Scoring;
 use crate::align::traceback::TB_XJUMP;
 use bio::alignment::pairwise::MatchFunc;
@@ -19,10 +18,10 @@ use bio::utils::TextSlice;
 
 use crate::align::aligners::constants::AlignmentOperation;
 use crate::align::aligners::constants::DEFAULT_ALIGNER_CAPACITY;
-use crate::align::aligners::x_buffer::XBuffer;
 use crate::align::alignment::Alignment;
 
 use super::constants::MIN_SCORE;
+use super::JumpInfo;
 use crate::align::traceback::cell::Traceback;
 use crate::align::traceback::traceback_single_stranded;
 use crate::align::traceback::Cell;
@@ -91,7 +90,6 @@ pub struct SingleStrandAligner<F: MatchFunc> {
     pub Sn: Vec<i32>,
     pub traceback: Traceback,
     pub scoring: Scoring<F>,
-    pub x_buffer: XBuffer,
     pub circular: bool,
 }
 
@@ -255,48 +253,47 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         j: usize,
         prev: usize,
         addend: i32,
-    ) -> (XBufferValue, u32) {
-        // Get the score and value for jumping
-        let x_jump = {
-            let mut value = self.x_buffer.get(i);
-            value.score += addend;
-            value
+        jump_info: JumpInfo,
+    ) -> JumpInfo {
+        // add the specific addend!
+        let jump_info = {
+            let mut info = jump_info.clone();
+            info.score += addend;
+            info
         };
-        let x_jump_len = self.traceback.get(x_jump.from as usize, j - 1).get_s_len() + 1;
 
         // DO NOT consider a circular no-cost jump from the end (previous) to the start (current)
         if !self.circular || i != 1 {
-            return (x_jump, x_jump_len);
+            return jump_info;
         }
 
         // Do not jump from an Xclip
         let jump_from_end_tb = self.traceback.get(m, j - 1).get_s().tb;
         if jump_from_end_tb == TB_XCLIP_SUFFIX {
-            return (x_jump, x_jump_len);
+            return jump_info;
         }
 
         // Get the score of jumping from the end of the previous column to the start of the current
         // column
         let jump_from_end_score = self.S[prev][m] + addend;
-        if x_jump.score > jump_from_end_score {
-            return (x_jump, x_jump_len);
+        if jump_info.score > jump_from_end_score {
+            return jump_info;
         }
 
         // If equal, tie-break on teh longest alignment length
-        let jump_from_end_len = self.traceback.get(m, j - 1).get_s_len() + 1;
-        if jump_from_end_score == x_jump.score && jump_from_end_len <= x_jump_len {
-            return (x_jump, x_jump_len);
+        let jump_from_end_s = self.traceback.get(m, j - 1).get_s();
+        let jump_from_end_len = jump_from_end_s.len + 1;
+        if jump_from_end_score == jump_info.score && jump_from_end_len <= jump_info.len {
+            return jump_info;
         }
 
         // return the zero-cost jump from the end
-        (
-            XBufferValue {
-                score: jump_from_end_score,
-                from: m as u32,
-                flip_strand: false,
-            },
-            jump_from_end_len,
-        )
+        JumpInfo {
+            score: jump_from_end_score,
+            from: m as u32,
+            flip_strand: jump_from_end_s.flip_strand,
+            len: jump_from_end_len,
+        }
     }
 
     pub fn fill_column(
@@ -308,6 +305,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         j: usize,
         prev: usize,
         curr: usize,
+        jump_info: JumpInfo,
     ) {
         let q = y[j - 1];
         let xclip_score = self.scoring.xclip_prefix
@@ -379,16 +377,20 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 tb.set_s_all(TB_INS, tb.get_i_len(), (i - 1) as u32, false);
             }
             // Align the x[i-1] with y[j-1] through a jump move.
-            let (x_jump, x_jump_len) = self.get_jump_score_and_len(m, i, j, prev, addend);
-            let do_jump = x_jump.score > best_s_score
-                || (x_jump.score == best_s_score
+            let x_jump_info = self.get_jump_score_and_len(m, i, j, prev, addend, jump_info);
+            let do_jump = x_jump_info.score > best_s_score
+                || (x_jump_info.score == best_s_score
                     && best_s_score == diag_score
-                    && x_jump_len > diag_len);
+                    && x_jump_info.len > diag_len);
             if do_jump {
-                best_s_score = x_jump.score;
-                let x_jump_len = self.traceback.get(x_jump.from as usize, j - 1).get_s_len() + 1;
+                best_s_score = x_jump_info.score;
+                let x_jump_len = self
+                    .traceback
+                    .get(x_jump_info.from as usize, j - 1)
+                    .get_s_len()
+                    + 1;
                 let s_tb = if p == q { TB_MATCH } else { TB_SUBST };
-                tb.set_s_all(s_tb, x_jump_len, x_jump.from, x_jump.flip_strand);
+                tb.set_s_all(s_tb, x_jump_len, x_jump_info.from, x_jump_info.flip_strand);
             }
             // X-prefix clip
             if xclip_score > best_s_score {
@@ -617,7 +619,6 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             Sn: Vec::with_capacity(m + 1),
             traceback: Traceback::with_capacity(m, n),
             scoring: Scoring::new(gap_open, gap_extend, jump_score, match_fn),
-            x_buffer: XBuffer::new(m),
             circular: false,
         }
     }
@@ -673,7 +674,6 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             Sn: Vec::with_capacity(m + 1),
             traceback: Traceback::with_capacity(m, n),
             scoring,
-            x_buffer: XBuffer::new(m),
             circular: false,
         }
     }
@@ -681,6 +681,30 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     /// Sets the value for treating x as circular, allowing for a zero-cost jump to the start of x.
     pub fn set_circular(&mut self, circular: bool) {
         self.circular = circular;
+    }
+
+    /// Gets the best jump score and x-index for the jump
+    pub fn get_jump_info(&mut self, m: usize, j: usize) -> JumpInfo {
+        let cur = j % 2;
+
+        let mut best_jump_score = self.S[cur][0] + self.scoring.jump_score;
+        let mut best_jump_from = 0;
+
+        for k in 1..=m {
+            if best_jump_score < self.S[cur][k] + self.scoring.jump_score {
+                best_jump_score = self.S[cur][k] + self.scoring.jump_score;
+                best_jump_from = k;
+            }
+        }
+
+        let best_jump_len = self.traceback.get(best_jump_from as usize, j).get_s_len() + 1;
+
+        JumpInfo {
+            score: best_jump_score,
+            from: best_jump_from as u32,
+            flip_strand: false,
+            len: best_jump_len,
+        }
     }
 
     /// The core function to compute the alignment
@@ -701,11 +725,12 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             // Initialize the column
             self.init_column(j, curr, m, n);
 
-            // Initiliaze the jump buffers
-            self.x_buffer.fill(m, j - 1, &self.S, &self.scoring);
+            // Get the best jump score and x-index for the jump
+            let jump_info = self.get_jump_info(m, j - 1);
+            eprintln!("j: {j} jump_info: {jump_info:?}");
 
             // Fill the column
-            self.fill_column(x, y, m, n, j, prev, curr);
+            self.fill_column(x, y, m, n, j, prev, curr, jump_info);
         }
 
         self.fill_last_column_and_end_clipping(m, n);
