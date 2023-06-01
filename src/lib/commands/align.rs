@@ -207,18 +207,33 @@ pub struct Align {
     )]
     pub jump_score: i32,
 
-    /// The alignment mode
-    /// - Local: aligns a sub-sequence of the read versus a sub-sequence of the reference
-    /// - Semiglobal: aligns the full read versus a sub-sequence of the reference
-    /// - Global: aligns the full read versus the full reference
-    #[clap(long, short = 'm', default_value = "local", display_order = 17)]
+    /// The alignment mode:
+    /// - Local: aligns a sub-sequence of the read versus a sub-sequence of the reference.
+    /// - Semiglobal: aligns the full read versus a sub-sequence of the reference.
+    /// - Global: aligns the full read versus the full reference.
+    #[clap(
+        long,
+        short = 'm',
+        default_value = "local",
+        display_order = 17,
+        verbatim_doc_comment
+    )]
     pub mode: AlignmentMode,
 
-    #[clap(long, short = 'P', default_value = "query-length", display_order = 18)]
+    /// Determines how to pick the primary alignment:
+    /// - query-length: the longest aligned query length, then by `score`
+    /// - score: the best scoring alignment, then by `query-length`
+    #[clap(
+        long,
+        short = 'P',
+        default_value = "query-length",
+        display_order = 18,
+        verbatim_doc_comment
+    )]
     pub pick_primary: PrimaryPickingStrategy,
 
     /// The compression level of the output BAM
-    #[clap(long, short = 'c', default_value = "0", display_order = 19)]
+    #[clap(long, short = 'c', default_value = "0", display_order = 20)]
     pub compression: u8,
 }
 
