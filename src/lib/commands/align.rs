@@ -171,7 +171,7 @@ pub struct Align {
     #[clap(
         long,
         short = 'B',
-        default_value = "-1",
+        default_value = "-4",
         allow_hyphen_values = true,
         display_order = 13
     )]
@@ -181,7 +181,7 @@ pub struct Align {
     #[clap(
         long,
         short = 'O',
-        default_value = "-5",
+        default_value = "-6",
         allow_hyphen_values = true,
         display_order = 14
     )]
@@ -191,7 +191,7 @@ pub struct Align {
     #[clap(
         long,
         short = 'E',
-        default_value = "-1",
+        default_value = "-2",
         allow_hyphen_values = true,
         display_order = 15
     )]
@@ -295,7 +295,12 @@ impl Align {
                         results.push((record, None, Some(score)));
                     }
                 }
-                _ => panic!("Bug: should not reach here"),
+                (Some((alignment, is_forward)), None) => {
+                    for record in group {
+                        let alignment = alignment.clone();
+                        results.push((record, Some((alignment, is_forward)), None));
+                    }
+                }
             };
         }
 
