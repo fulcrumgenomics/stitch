@@ -301,7 +301,7 @@ pub fn to_records<F: MatchFunc>(
     use_eq_and_x: bool,
     alt_score: Option<i32>,
     scoring: &Scoring<F>,
-    by_primary: PrimaryPickingStrategy,
+    pick_primary: PrimaryPickingStrategy,
     target_len: usize,
 ) -> Result<Vec<SamRecord>> {
     let name = header_to_name(fastq.head())?;
@@ -315,16 +315,20 @@ pub fn to_records<F: MatchFunc>(
         let subs = builder.build(&alignment, true, scoring);
         ensure!(!subs.is_empty());
 
-        let primary_index = match by_primary {
+        let primary_index = match pick_primary {
             PrimaryPickingStrategy::QueryLength => subs
                 .iter()
                 .enumerate()
-                .max_by_key(|(_, alignment)| alignment.score)
+                .max_by_key(|(_, alignment)| {
+                    (alignment.query_end - alignment.query_start, alignment.score)
+                })
                 .map_or(0, |(index, _)| index),
             PrimaryPickingStrategy::Score => subs
                 .iter()
                 .enumerate()
-                .max_by_key(|(_, alignment)| alignment.query_end - alignment.query_start)
+                .max_by_key(|(_, alignment)| {
+                    (alignment.score, alignment.query_end - alignment.query_start)
+                })
                 .map_or(0, |(index, _)| index),
         };
 
