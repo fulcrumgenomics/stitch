@@ -46,8 +46,25 @@ use super::sub_alignment::SubAlignmentBuilder;
 
 pub(crate) mod constants;
 pub(crate) mod double_strand;
+pub(crate) mod multi_contig_aligner;
 pub(crate) mod single_strand;
-mod x_buffer;
+
+#[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
+pub struct JumpInfo {
+    score: i32,
+    from: u32,
+    flip_strand: bool,
+    len: u32,
+}
+
+impl JumpInfo {
+    pub fn flip_strand(&self) -> Self {
+        JumpInfo {
+            flip_strand: !self.flip_strand,
+            ..*self
+        }
+    }
+}
 
 pub struct Aligners<F: MatchFunc> {
     banded: BandedAligner<F>,

@@ -65,7 +65,7 @@ use crate::align::scoring::Scoring;
 /// `scoring` - see [`bio::alignment::pairwise::Scoring`](struct.Scoring.html)
 pub struct DoubleStrandAligner<F: MatchFunc> {
     pub forward: SingleStrandAligner<F>,
-    pub reverse: SingleStrandAligner<F>,
+    pub revcomp: SingleStrandAligner<F>,
 }
 
 impl<F: MatchFunc> DoubleStrandAligner<F> {
@@ -122,7 +122,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
                 jump_score,
                 match_fn(),
             ),
-            reverse: SingleStrandAligner::with_capacity(
+            revcomp: SingleStrandAligner::with_capacity(
                 m,
                 n,
                 gap_open,
@@ -164,31 +164,14 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
     ) -> Self {
         DoubleStrandAligner {
             forward: SingleStrandAligner::with_capacity_and_scoring(m, n, scoring_fwd),
-            reverse: SingleStrandAligner::with_capacity_and_scoring(m, n, scoring_rev),
-        }
-    }
-
-    fn fill_x_buffer_stranded(&mut self, m: usize) {
-        for i in 0..=m {
-            let fwd = self.forward.x_buffer.get(i);
-            let rev = self.reverse.x_buffer.get(i);
-            assert!(!fwd.flip_strand, "Bug: fwd strand");
-            assert!(!rev.flip_strand, "Bug: rev strand");
-
-            match fwd.score.cmp(&rev.score) {
-                std::cmp::Ordering::Less => self.forward.x_buffer.set(i, rev.score, rev.from, true),
-                std::cmp::Ordering::Greater => {
-                    self.reverse.x_buffer.set(i, fwd.score, fwd.from, true)
-                }
-                std::cmp::Ordering::Equal => (),
-            };
+            revcomp: SingleStrandAligner::with_capacity_and_scoring(m, n, scoring_rev),
         }
     }
 
     /// Sets the value for treating x as circular, allowing for a zero-cost jump to the start of x.
     pub fn set_circular(&mut self, circular: bool) {
         self.forward.set_circular(circular);
-        self.reverse.set_circular(circular);
+        self.revcomp.set_circular(circular);
     }
 
     /// The core function to compute the alignment
@@ -209,7 +192,7 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         // Set the initial conditions
         // We are repeating some work, but that's okay!
         self.forward.init_matrices(m, n);
-        self.reverse.init_matrices(m, n);
+        self.revcomp.init_matrices(m, n);
 
         for j in 1..=n {
             let curr = j % 2;
@@ -217,27 +200,31 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
 
             // Initialize the column
             self.forward.init_column(j, curr, m, n);
-            self.reverse.init_column(j, curr, m, n);
+            self.revcomp.init_column(j, curr, m, n);
 
             // Initiliaze the jump buffers
-            self.forward
-                .x_buffer
-                .fill(m, j - 1, &self.forward.S, &self.forward.scoring);
-            self.reverse
-                .x_buffer
-                .fill(m, j - 1, &self.reverse.S, &self.reverse.scoring);
-            self.fill_x_buffer_stranded(m);
-
+            let forward_jump_info = self.forward.get_jump_info(m, j - 1);
+            let revcomp_jump_info = self.revcomp.get_jump_info(m, j - 1);
+            let (forward_jump_info, revcomp_jump_info) = match forward_jump_info
+                .score
+                .cmp(&revcomp_jump_info.score)
+            {
+                std::cmp::Ordering::Greater => (forward_jump_info, forward_jump_info.flip_strand()),
+                std::cmp::Ordering::Less => (revcomp_jump_info.flip_strand(), revcomp_jump_info),
+                std::cmp::Ordering::Equal => (forward_jump_info, revcomp_jump_info),
+            };
             // Fill the column
-            self.forward.fill_column(x_forward, y, m, n, j, prev, curr);
-            self.reverse.fill_column(x_revcomp, y, m, n, j, prev, curr);
+            self.forward
+                .fill_column(x_forward, y, m, n, j, prev, curr, forward_jump_info);
+            self.revcomp
+                .fill_column(x_revcomp, y, m, n, j, prev, curr, revcomp_jump_info);
         }
 
         self.forward.fill_last_column_and_end_clipping(m, n);
-        self.reverse.fill_last_column_and_end_clipping(m, n);
+        self.revcomp.fill_last_column_and_end_clipping(m, n);
 
         // Traceback...
-        traceback_double_stranded(&self.forward, &self.reverse, m, n)
+        traceback_double_stranded(&self.forward, &self.revcomp, m, n)
     }
 
     /// Calculate global alignment of x against y.
@@ -256,10 +243,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
             self.forward.scoring.yclip_suffix,
         ];
         let reverse_clip_penalties = [
-            self.reverse.scoring.xclip_prefix,
-            self.reverse.scoring.xclip_suffix,
-            self.reverse.scoring.yclip_prefix,
-            self.reverse.scoring.yclip_suffix,
+            self.revcomp.scoring.xclip_prefix,
+            self.revcomp.scoring.xclip_suffix,
+            self.revcomp.scoring.yclip_prefix,
+            self.revcomp.scoring.yclip_suffix,
         ];
 
         // Temporarily Over-write the clip penalties
@@ -267,10 +254,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.forward.scoring.xclip_suffix = MIN_SCORE;
         self.forward.scoring.yclip_prefix = MIN_SCORE;
         self.forward.scoring.yclip_suffix = MIN_SCORE;
-        self.reverse.scoring.xclip_prefix = MIN_SCORE;
-        self.reverse.scoring.xclip_suffix = MIN_SCORE;
-        self.reverse.scoring.yclip_prefix = MIN_SCORE;
-        self.reverse.scoring.yclip_suffix = MIN_SCORE;
+        self.revcomp.scoring.xclip_prefix = MIN_SCORE;
+        self.revcomp.scoring.xclip_suffix = MIN_SCORE;
+        self.revcomp.scoring.yclip_prefix = MIN_SCORE;
+        self.revcomp.scoring.yclip_suffix = MIN_SCORE;
 
         // Compute the alignment
         let mut alignment = self.custom(x_forward, x_revcomp, y);
@@ -281,10 +268,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
         self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
         self.forward.scoring.yclip_suffix = forward_clip_penalties[3];
-        self.reverse.scoring.xclip_prefix = reverse_clip_penalties[0];
-        self.reverse.scoring.xclip_suffix = reverse_clip_penalties[1];
-        self.reverse.scoring.yclip_prefix = reverse_clip_penalties[2];
-        self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
+        self.revcomp.scoring.xclip_prefix = reverse_clip_penalties[0];
+        self.revcomp.scoring.xclip_suffix = reverse_clip_penalties[1];
+        self.revcomp.scoring.yclip_prefix = reverse_clip_penalties[2];
+        self.revcomp.scoring.yclip_suffix = reverse_clip_penalties[3];
         alignment
     }
 
@@ -304,10 +291,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
             self.forward.scoring.yclip_suffix,
         ];
         let reverse_clip_penalties = [
-            self.reverse.scoring.xclip_prefix,
-            self.reverse.scoring.xclip_suffix,
-            self.reverse.scoring.yclip_prefix,
-            self.reverse.scoring.yclip_suffix,
+            self.revcomp.scoring.xclip_prefix,
+            self.revcomp.scoring.xclip_suffix,
+            self.revcomp.scoring.yclip_prefix,
+            self.revcomp.scoring.yclip_suffix,
         ];
 
         // Temporarily Over-write the clip penalties
@@ -315,10 +302,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.forward.scoring.xclip_suffix = MIN_SCORE;
         self.forward.scoring.yclip_prefix = 0;
         self.forward.scoring.yclip_suffix = 0;
-        self.reverse.scoring.xclip_prefix = MIN_SCORE;
-        self.reverse.scoring.xclip_suffix = MIN_SCORE;
-        self.reverse.scoring.yclip_prefix = 0;
-        self.reverse.scoring.yclip_suffix = 0;
+        self.revcomp.scoring.xclip_prefix = MIN_SCORE;
+        self.revcomp.scoring.xclip_suffix = MIN_SCORE;
+        self.revcomp.scoring.yclip_prefix = 0;
+        self.revcomp.scoring.yclip_suffix = 0;
 
         // Compute the alignment
         let mut alignment = self.custom(x_forward, x_revcomp, y);
@@ -344,10 +331,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
         self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
         self.forward.scoring.yclip_suffix = forward_clip_penalties[3];
-        self.reverse.scoring.xclip_prefix = reverse_clip_penalties[0];
-        self.reverse.scoring.xclip_suffix = reverse_clip_penalties[1];
-        self.reverse.scoring.yclip_prefix = reverse_clip_penalties[2];
-        self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
+        self.revcomp.scoring.xclip_prefix = reverse_clip_penalties[0];
+        self.revcomp.scoring.xclip_suffix = reverse_clip_penalties[1];
+        self.revcomp.scoring.yclip_prefix = reverse_clip_penalties[2];
+        self.revcomp.scoring.yclip_suffix = reverse_clip_penalties[3];
 
         alignment
     }
@@ -368,10 +355,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
             self.forward.scoring.yclip_suffix,
         ];
         let reverse_clip_penalties = [
-            self.reverse.scoring.xclip_prefix,
-            self.reverse.scoring.xclip_suffix,
-            self.reverse.scoring.yclip_prefix,
-            self.reverse.scoring.yclip_suffix,
+            self.revcomp.scoring.xclip_prefix,
+            self.revcomp.scoring.xclip_suffix,
+            self.revcomp.scoring.yclip_prefix,
+            self.revcomp.scoring.yclip_suffix,
         ];
 
         // Temporarily Over-write the clip penalties
@@ -379,10 +366,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.forward.scoring.xclip_suffix = 0;
         self.forward.scoring.yclip_prefix = MIN_SCORE;
         self.forward.scoring.yclip_suffix = MIN_SCORE;
-        self.reverse.scoring.xclip_prefix = 0;
-        self.reverse.scoring.xclip_suffix = 0;
-        self.reverse.scoring.yclip_prefix = MIN_SCORE;
-        self.reverse.scoring.yclip_suffix = MIN_SCORE;
+        self.revcomp.scoring.xclip_prefix = 0;
+        self.revcomp.scoring.xclip_suffix = 0;
+        self.revcomp.scoring.yclip_prefix = MIN_SCORE;
+        self.revcomp.scoring.yclip_suffix = MIN_SCORE;
 
         // Compute the alignment
         let mut alignment = self.custom(x_forward, x_revcomp, y);
@@ -407,10 +394,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
         self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
         self.forward.scoring.yclip_suffix = forward_clip_penalties[3];
-        self.reverse.scoring.xclip_prefix = reverse_clip_penalties[0];
-        self.reverse.scoring.xclip_suffix = reverse_clip_penalties[1];
-        self.reverse.scoring.yclip_prefix = reverse_clip_penalties[2];
-        self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
+        self.revcomp.scoring.xclip_prefix = reverse_clip_penalties[0];
+        self.revcomp.scoring.xclip_suffix = reverse_clip_penalties[1];
+        self.revcomp.scoring.yclip_prefix = reverse_clip_penalties[2];
+        self.revcomp.scoring.yclip_suffix = reverse_clip_penalties[3];
 
         alignment
     }
@@ -431,10 +418,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
             self.forward.scoring.yclip_suffix,
         ];
         let reverse_clip_penalties = [
-            self.reverse.scoring.xclip_prefix,
-            self.reverse.scoring.xclip_suffix,
-            self.reverse.scoring.yclip_prefix,
-            self.reverse.scoring.yclip_suffix,
+            self.revcomp.scoring.xclip_prefix,
+            self.revcomp.scoring.xclip_suffix,
+            self.revcomp.scoring.yclip_prefix,
+            self.revcomp.scoring.yclip_suffix,
         ];
 
         // Temporarily Over-write the clip penalties
@@ -442,10 +429,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.forward.scoring.xclip_suffix = 0;
         self.forward.scoring.yclip_prefix = 0;
         self.forward.scoring.yclip_suffix = 0;
-        self.reverse.scoring.xclip_prefix = 0;
-        self.reverse.scoring.xclip_suffix = 0;
-        self.reverse.scoring.yclip_prefix = 0;
-        self.reverse.scoring.yclip_suffix = 0;
+        self.revcomp.scoring.xclip_prefix = 0;
+        self.revcomp.scoring.xclip_suffix = 0;
+        self.revcomp.scoring.yclip_prefix = 0;
+        self.revcomp.scoring.yclip_suffix = 0;
 
         // Compute the alignment
         let mut alignment = self.custom(x_forward, x_revcomp, y);
@@ -471,10 +458,10 @@ impl<F: MatchFunc> DoubleStrandAligner<F> {
         self.forward.scoring.xclip_suffix = forward_clip_penalties[1];
         self.forward.scoring.yclip_prefix = forward_clip_penalties[2];
         self.forward.scoring.yclip_suffix = forward_clip_penalties[3];
-        self.reverse.scoring.xclip_prefix = reverse_clip_penalties[0];
-        self.reverse.scoring.xclip_suffix = reverse_clip_penalties[1];
-        self.reverse.scoring.yclip_prefix = reverse_clip_penalties[2];
-        self.reverse.scoring.yclip_suffix = reverse_clip_penalties[3];
+        self.revcomp.scoring.xclip_prefix = reverse_clip_penalties[0];
+        self.revcomp.scoring.xclip_suffix = reverse_clip_penalties[1];
+        self.revcomp.scoring.yclip_prefix = reverse_clip_penalties[2];
+        self.revcomp.scoring.yclip_suffix = reverse_clip_penalties[3];
 
         alignment
     }
