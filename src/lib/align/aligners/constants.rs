@@ -95,9 +95,14 @@ impl AlignmentOperation {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Default, Debug, PartialEq, Eq, Copy, Clone, ValueEnum)]
 pub enum AlignmentMode {
+    /// Aligns a sub-sequence of the read versus a sub-sequence of the reference
     #[default]
     Local,
-    Semiglobal,
+    /// Aligns a sub-sequence of the read versus the full reference.
+    QueryLocal,
+    /// Aligns the full read versus a sub-sequence of the reference
+    TargetLocal,
+    /// Aligns the full read versus the full reference.
     Global,
     Custom,
 }

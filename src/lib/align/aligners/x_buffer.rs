@@ -110,7 +110,6 @@ impl XBuffer {
                 prev_prefix_score = cur_prefix_score;
                 prev_prefix_from = k as u32;
             }
-            // score[k] = max(prefix_score[k], suffix_score[k])
             if prev_prefix_score >= self.score[k] {
                 self.score[k] = prev_prefix_score;
                 self.from[k] = prev_prefix_from;

@@ -83,7 +83,8 @@ impl Aligners<MatchParams> {
     pub fn new(opts: &Align, target_seq_len: usize) -> Aligners<MatchParams> {
         let (xclip_prefix, xclip_suffix, yclip_prefix, yclip_suffix) = match opts.mode {
             AlignmentMode::Local => (0, 0, 0, 0),
-            AlignmentMode::Semiglobal => (MIN_SCORE, MIN_SCORE, 0, 0),
+            AlignmentMode::QueryLocal => (MIN_SCORE, MIN_SCORE, 0, 0),
+            AlignmentMode::TargetLocal => (0, 0, MIN_SCORE, MIN_SCORE),
             AlignmentMode::Global => (MIN_SCORE, MIN_SCORE, MIN_SCORE, MIN_SCORE),
             AlignmentMode::Custom => panic!("Custom alignment mode not supported"), // TODO: move to main run method
         };
@@ -110,17 +111,21 @@ impl Aligners<MatchParams> {
             opts.w,
         );
 
-        let single_strand = SingleStrandAligner::with_capacity_and_scoring(
-            10000,
-            target_seq_len,
-            Self::build_stranded_scoring(
-                opts,
-                xclip_prefix,
-                xclip_suffix,
-                yclip_prefix,
-                yclip_suffix,
-            ),
-        );
+        let single_strand = {
+            let mut aligner = SingleStrandAligner::with_capacity_and_scoring(
+                10000,
+                target_seq_len,
+                Self::build_stranded_scoring(
+                    opts,
+                    xclip_prefix,
+                    xclip_suffix,
+                    yclip_prefix,
+                    yclip_suffix,
+                ),
+            );
+            aligner.set_circular(opts.circular);
+            aligner
+        };
         let double_strand: DoubleStrandAligner<MatchParams> = {
             let scoring_fwd = Self::build_stranded_scoring(
                 &opts.clone(),
@@ -137,12 +142,14 @@ impl Aligners<MatchParams> {
                 yclip_suffix,
             );
 
-            DoubleStrandAligner::with_capacity_and_scoring(
+            let mut aligner = DoubleStrandAligner::with_capacity_and_scoring(
                 10000,
                 target_seq_len,
                 scoring_fwd,
                 scoring_rev,
-            )
+            );
+            aligner.set_circular(opts.circular);
+            aligner
         };
 
         Self {

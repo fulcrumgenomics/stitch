@@ -10,6 +10,7 @@ use std::i32;
 use std::iter::repeat;
 
 use crate::align::aligners::constants::AlignmentMode;
+use crate::align::aligners::x_buffer::XBufferValue;
 use crate::align::scoring::Scoring;
 use crate::align::traceback::TB_XJUMP;
 use bio::alignment::pairwise::MatchFunc;
@@ -91,6 +92,7 @@ pub struct SingleStrandAligner<F: MatchFunc> {
     pub traceback: Traceback,
     pub scoring: Scoring<F>,
     pub x_buffer: XBuffer,
+    pub circular: bool,
 }
 
 impl Default for SingleStrandAligner<MatchParams> {
@@ -245,6 +247,58 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         }
     }
 
+    /// Gets the jump score for a given cell in the matrix.
+    fn get_jump_score_and_len(
+        &self,
+        m: usize,
+        i: usize,
+        j: usize,
+        prev: usize,
+        addend: i32,
+    ) -> (XBufferValue, u32) {
+        // Get the score and value for jumping
+        let x_jump = {
+            let mut value = self.x_buffer.get(i);
+            value.score += addend;
+            value
+        };
+        let x_jump_len = self.traceback.get(x_jump.from as usize, j - 1).get_s_len() + 1;
+
+        // DO NOT consider a circular no-cost jump from the end (previous) to the start (current)
+        if !self.circular || i != 1 {
+            return (x_jump, x_jump_len);
+        }
+
+        // Do not jump from an Xclip
+        let jump_from_end_tb = self.traceback.get(m, j - 1).get_s().tb;
+        if jump_from_end_tb == TB_XCLIP_SUFFIX {
+            return (x_jump, x_jump_len);
+        }
+
+        // Get the score of jumping from the end of the previous column to the start of the current
+        // column
+        let jump_from_end_score = self.S[prev][m] + addend;
+        if x_jump.score > jump_from_end_score {
+            return (x_jump, x_jump_len);
+        }
+
+        // If equal, tie-break on teh longest alignment length
+        let jump_from_end_len = self.traceback.get(m, j - 1).get_s_len() + 1;
+        if jump_from_end_score == x_jump.score && jump_from_end_len <= x_jump_len {
+            return (x_jump, x_jump_len);
+        }
+
+        // return the zero-cost jump from the end
+        (
+            XBufferValue {
+                score: jump_from_end_score,
+                from: m as u32,
+                flip_strand: false,
+            },
+            jump_from_end_len,
+        )
+    }
+
     pub fn fill_column(
         &mut self,
         x: TextSlice<'_>,
@@ -308,9 +362,9 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             let addend = self.scoring.match_fn.score(p, q);
             // Align the x[i-1] with y[j-1] through a diagonal move.
             let diag_score = self.S[prev][i - 1] + addend;
+            let diag_len = self.traceback.get(i - 1, j - 1).get_s_len() + 1;
             if diag_score >= best_s_score {
                 best_s_score = diag_score;
-                let diag_len = self.traceback.get(i - 1, j - 1).get_s_len() + 1;
                 let s_tb = if p == q { TB_MATCH } else { TB_SUBST };
                 tb.set_s_all(s_tb, diag_len, (i - 1) as u32, false);
             }
@@ -325,23 +379,11 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 tb.set_s_all(TB_INS, tb.get_i_len(), (i - 1) as u32, false);
             }
             // Align the x[i-1] with y[j-1] through a jump move.
-            let x_jump = {
-                let mut value = self.x_buffer.get(i);
-                value.score += addend;
-                value
-            };
-            let do_jump = {
-                if x_jump.score > best_s_score {
-                    true
-                } else if x_jump.score == best_s_score && best_s_score == diag_score {
-                    let x_jump_len =
-                        self.traceback.get(x_jump.from as usize, j - 1).get_s_len() + 1;
-                    let diag_len = tb.get_s_len();
-                    x_jump_len > diag_len
-                } else {
-                    false
-                }
-            };
+            let (x_jump, x_jump_len) = self.get_jump_score_and_len(m, i, j, prev, addend);
+            let do_jump = x_jump.score > best_s_score
+                || (x_jump.score == best_s_score
+                    && best_s_score == diag_score
+                    && x_jump_len > diag_len);
             if do_jump {
                 best_s_score = x_jump.score;
                 let x_jump_len = self.traceback.get(x_jump.from as usize, j - 1).get_s_len() + 1;
@@ -576,6 +618,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             traceback: Traceback::with_capacity(m, n),
             scoring: Scoring::new(gap_open, gap_extend, jump_score, match_fn),
             x_buffer: XBuffer::new(m),
+            circular: false,
         }
     }
 
@@ -631,7 +674,13 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             traceback: Traceback::with_capacity(m, n),
             scoring,
             x_buffer: XBuffer::new(m),
+            circular: false,
         }
+    }
+
+    /// Sets the value for treating x as circular, allowing for a zero-cost jump to the start of x.
+    pub fn set_circular(&mut self, circular: bool) {
+        self.circular = circular;
     }
 
     /// The core function to compute the alignment
@@ -696,7 +745,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
     /// Calculate semiglobal alignment of x against y (x is global, y is local).
     #[allow(dead_code)]
-    pub fn semiglobal(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> Alignment {
+    pub fn querylocal(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> Alignment {
         // Store the current clip penalties
         let clip_penalties = [
             self.scoring.xclip_prefix,
@@ -713,7 +762,45 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
         // Compute the alignment
         let mut alignment = self.custom(x, y);
-        alignment.mode = AlignmentMode::Semiglobal;
+        alignment.mode = AlignmentMode::QueryLocal;
+
+        // Filter out Yclip from alignment.operations
+        {
+            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xskip};
+            alignment.operations.retain(|x| {
+                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xskip(_))
+            });
+        }
+
+        // Set the clip penalties to the original values
+        self.scoring.xclip_prefix = clip_penalties[0];
+        self.scoring.xclip_suffix = clip_penalties[1];
+        self.scoring.yclip_prefix = clip_penalties[2];
+        self.scoring.yclip_suffix = clip_penalties[3];
+
+        alignment
+    }
+
+    /// Calculate semiglobal alignment of x against y (x is local, y is global).
+    #[allow(dead_code)]
+    pub fn targetlocal(&mut self, x: TextSlice<'_>, y: TextSlice<'_>) -> Alignment {
+        // Store the current clip penalties
+        let clip_penalties = [
+            self.scoring.xclip_prefix,
+            self.scoring.xclip_suffix,
+            self.scoring.yclip_prefix,
+            self.scoring.yclip_suffix,
+        ];
+
+        // Temporarily Over-write the clip penalties
+        self.scoring.xclip_prefix = 0;
+        self.scoring.xclip_suffix = 0;
+        self.scoring.yclip_prefix = MIN_SCORE;
+        self.scoring.yclip_suffix = MIN_SCORE;
+
+        // Compute the alignment
+        let mut alignment = self.custom(x, y);
+        alignment.mode = AlignmentMode::TargetLocal;
 
         // Filter out Yclip from alignment.operations
         {
@@ -1115,47 +1202,47 @@ pub mod tests {
     }
 
     #[rstest]
-    fn test_semiglobal_identical() {
+    fn test_querylocal_identical() {
         let x = s("ACGTAACC");
         let y = s("ACGTAACC");
         let mut aligner = SingleStrandAligner::default();
-        let alignment = aligner.semiglobal(&x, &y);
+        let alignment = aligner.querylocal(&x, &y);
         assert_alignment(&alignment, 0, 8, 0, 8, 8, "8=", 8);
     }
 
     #[rstest]
-    fn test_semiglobal_identical_subsequence() {
+    fn test_querylocal_identical_subsequence() {
         let x = s("  CCGG  ");
         let y = s("AACCGGTT");
         let mut aligner = SingleStrandAligner::default();
-        let alignment = aligner.semiglobal(&x, &y);
+        let alignment = aligner.querylocal(&x, &y);
         assert_alignment(&alignment, 0, 4, 2, 6, 4, "4=", 4);
     }
 
     #[rstest]
-    fn test_semiglobal_subsequence_with_mismatch() {
+    fn test_querylocal_subsequence_with_mismatch() {
         let x = s("       CGCGTCGTATACGTCGTT");
         let y = s("AAGATATCGCGTCGTATACGTCGTa");
         let mut aligner = SingleStrandAligner::default();
-        let alignment = aligner.semiglobal(&x, &y);
+        let alignment = aligner.querylocal(&x, &y);
         assert_alignment(&alignment, 0, 18, 7, 25, 17 - 1, "17=1X", 18);
     }
 
     #[rstest]
-    fn test_semiglobal_subsequence_with_deletion() {
+    fn test_querylocal_subsequence_with_deletion() {
         let x = s("  CGCG-CGCG  ");
         let y = s("AACGCGACGCGTT");
         let mut aligner = SingleStrandAligner::default();
-        let alignment = aligner.semiglobal(&x, &y);
+        let alignment = aligner.querylocal(&x, &y);
         assert_alignment(&alignment, 0, 8, 2, 11, 8 - (5 + 1), "4=1D4=", 9);
     }
 
     #[rstest]
-    fn test_semiglobal_insertion_when_x_longer_than_y() {
+    fn test_querylocal_insertion_when_x_longer_than_y() {
         let x = s("AAAAGGGGTTTT");
         let y = s("AAAA----TTTT");
         let mut aligner = SingleStrandAligner::default();
-        let alignment = aligner.semiglobal(&x, &y);
+        let alignment = aligner.querylocal(&x, &y);
         assert_alignment(
             &alignment,
             0,
@@ -1188,11 +1275,11 @@ pub mod tests {
     }
 
     #[rstest]
-    fn test_semiglobal_leading_and_trailing_deletions() {
+    fn test_querylocal_leading_and_trailing_deletions() {
         let x = s("-------------------GGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTG---------------------------");
         let y = s("AGGGCTATAGACTGCTAGAGGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTGAAATGAGCTATTAGTCATGACGCTTTT");
         let mut aligner = SingleStrandAligner::default();
-        let alignment = aligner.semiglobal(&x, &y);
+        let alignment = aligner.querylocal(&x, &y);
         assert_alignment(&alignment, 0, 54, 19, 73, 54, "54=", 54);
     }
 
@@ -1297,7 +1384,7 @@ pub mod tests {
     }
 
     #[rstest]
-    fn test_semiglobal_jump_with_leading_and_trailing_matches() {
+    fn test_querylocal_jump_with_leading_and_trailing_matches() {
         // The first 13bp of x and y align, then last 13bp of x and y align.  The "GATCGATC"
         // subsequence in x is aligned twice:
         //    [0 ........ 12]   [5 ...      17]
@@ -1306,7 +1393,7 @@ pub mod tests {
         let x = s("TTTTT________GATCGATCTTTTT");
         let y = s("TTTTTGATCGATCGATCGATCTTTTT");
         let mut aligner = SingleStrandAligner::default();
-        let alignment = aligner.semiglobal(&x, &y);
+        let alignment = aligner.querylocal(&x, &y);
 
         assert_alignment(&alignment, 0, 18, 0, 26, 26 - 10, "13=8j13=", 26);
     }
@@ -1362,7 +1449,7 @@ pub mod tests {
     }
 
     #[rstest]
-    fn test_semiglobal_sir_jump_a_lot() {
+    fn test_querylocal_sir_jump_a_lot() {
         //    [0 ...... 9] [20 .... 29] [10 .... 19] [30 .... 39]
         // x: [AAAAAAAAAA] [CCCCCCCCCC] [GGGGGGGGGG] [TTTTTTTTTT]
         // y:  AAAAAAAAAA==>CCCCCCCCCC==>GGGGGGGGGG==>TTTTTTTTTT
@@ -1370,7 +1457,7 @@ pub mod tests {
         let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTTT");
         let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTT");
         let mut aligner = SingleStrandAligner::default();
-        let alignment = aligner.semiglobal(&x, &y);
+        let alignment = aligner.querylocal(&x, &y);
         assert_alignment(
             &alignment,
             0,
@@ -1647,5 +1734,27 @@ pub mod tests {
         let mut aligner = SingleStrandAligner::new(-100_000, -100_000, -1, match_fn);
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 8, 0, 8, 8 - 1 - 1 - 1, "2=2J2=4j2=2J2=", 8);
+    }
+
+    #[rstest]
+    fn test_local_circular_jump() {
+        let x = s("AACCGGTT");
+        let y = s("TTAA");
+        let match_fn = MatchParams::new(1, -100_000);
+        let mut aligner = SingleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        aligner.set_circular(true);
+        let alignment = aligner.local(&x, &y);
+        assert_alignment(&alignment, 6, 2, 0, 4, 4, "2=8j2=", 4);
+    }
+
+    #[rstest]
+    fn test_targetlocal_circular_jump() {
+        let x = s("GGTTAACC");
+        let y = s("AACCGGTT");
+        let match_fn = MatchParams::new(1, -100_000);
+        let mut aligner = SingleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        aligner.set_circular(true);
+        let alignment = aligner.targetlocal(&x, &y);
+        assert_alignment(&alignment, 4, 4, 0, 8, 8, "4=8j4=", 8);
     }
 }
