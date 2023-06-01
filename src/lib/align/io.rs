@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use flate2::bufread::MultiGzDecoder;
 use flume::{bounded, Receiver, Sender};
-use itertools::{self, Itertools};
 use seq_io::fastq::{OwnedRecord as FastqOwnedRecord, Reader as FastqReader};
 use std::path::PathBuf;
 use std::thread::JoinHandle;
@@ -49,6 +48,46 @@ pub struct OutputMessage {
     pub results: Vec<OutputResult>,
 }
 
+pub struct FastqGroupingIterator<I: Iterator<Item = FastqOwnedRecord>> {
+    pub record: Option<FastqOwnedRecord>,
+    pub iter: I,
+}
+
+impl<I: Iterator<Item = FastqOwnedRecord>> FastqGroupingIterator<I> {
+    pub fn new(iter: I) -> Self {
+        Self { record: None, iter }
+    }
+}
+
+impl<I: Iterator<Item = FastqOwnedRecord>> Iterator for FastqGroupingIterator<I> {
+    type Item = Vec<FastqOwnedRecord>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Vec<FastqOwnedRecord>> {
+        if self.record.is_none() {
+            self.record = self.iter.next();
+        }
+        match self.record {
+            None => None,
+            Some(ref record) => {
+                let mut items: Vec<FastqOwnedRecord> = Vec::new();
+                let sequence = record.seq.clone();
+                items.push(record.clone());
+                self.record = None;
+                for record in &mut self.iter {
+                    if record.seq == sequence {
+                        items.push(record);
+                    } else {
+                        self.record = Some(record);
+                        break;
+                    }
+                }
+                Some(items)
+            }
+        }
+    }
+}
+
 /// A FASTQ reader that runs in its own thread and chunks reads to send to a pool of aligners.
 pub struct FastqThreadReader {
     /// The [`JoinHandle`] for the thread that is reading.
@@ -60,6 +99,24 @@ pub struct FastqThreadReader {
 }
 
 impl FastqThreadReader {
+    /// Writes the chunk of records to the alignment channel, as well as a receiver to the output
+    /// channel.
+    fn write_records_to_txs(
+        records: &[FastqOwnedRecord],
+        to_align_tx: &Sender<InputMessage>,
+        to_output_tx: &Sender<Receiver<OutputMessage>>,
+    ) {
+        let (records_tx, records_rx) = flume::unbounded(); // oneshot channel
+        let input_msg = InputMessage {
+            records: records.to_vec(),
+            oneshot: records_tx,
+        };
+        to_align_tx.send(input_msg).expect("Error sending message");
+        to_output_tx
+            .send(records_rx)
+            .expect("Error sending receiver");
+    }
+
     /// Creates a new `FastqThreadReader` in a new thread.
     pub fn new(file: PathBuf, decompress: bool, threads: usize) -> Self {
         // Channel to send chunks of records to align
@@ -94,22 +151,24 @@ impl FastqThreadReader {
                     Box::new(buf_handle) as Box<dyn Read>
                 }
             };
-            // Open a FASTQ reader, get an iterator over the records, and chunk them
-            let fastq_reader = FastqReader::with_capacity(maybe_decoder_handle, GZ_BUFSIZE)
+
+            // Open a FASTQ reader, then group reads that have the same read sequence, then chunk
+            // chunk the reads to send over the output channel, keeping reads with the same read
+            // sequence grouped together.
+            let fastq_iter = FastqReader::with_capacity(maybe_decoder_handle, GZ_BUFSIZE)
                 .into_records()
-                .chunks(RECORDS_PER_CHUNK_PER_THREAD * threads);
-            for chunk in &fastq_reader {
-                let records: Vec<FastqOwnedRecord> =
-                    chunk.map(|r| r.expect("Error reading")).collect();
-                let (records_tx, records_rx) = flume::unbounded(); // oneshot channel
-                let input_msg = InputMessage {
-                    records,
-                    oneshot: records_tx,
-                };
-                to_align_tx.send(input_msg).expect("Error sending message");
-                to_output_tx
-                    .send(records_rx)
-                    .expect("Error sending receiver");
+                .map(|r| r.expect("Error reading"));
+            let fastq_grouping_iter = FastqGroupingIterator::new(fastq_iter);
+            let mut records = Vec::new();
+            for chunk in fastq_grouping_iter {
+                records.extend(chunk);
+                if records.len() >= RECORDS_PER_CHUNK_PER_THREAD {
+                    Self::write_records_to_txs(&records, &to_align_tx, &to_output_tx);
+                    records.clear();
+                }
+            }
+            if !records.is_empty() {
+                Self::write_records_to_txs(&records, &to_align_tx, &to_output_tx);
             }
 
             Ok(())

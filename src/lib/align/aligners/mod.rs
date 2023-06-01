@@ -203,13 +203,13 @@ fn maybe_prealign<F: MatchFunc>(
 }
 
 pub fn align_double_strand<F: MatchFunc>(
-    record: FastqOwnedRecord,
+    record: &FastqOwnedRecord,
     target_seq: &TargetSeq,
     target_hash: &TargetHash,
     aligners: &mut Aligners<F>,
     pre_align: bool,
     pre_align_min_score: i32,
-) -> (FastqOwnedRecord, Option<(Alignment, bool)>, Option<i32>) {
+) -> (Option<(Alignment, bool)>, Option<i32>) {
     let query = record.seq();
 
     let (banded_fwd, banded_revcomp, prealign_score) = maybe_prealign(
@@ -237,19 +237,19 @@ pub fn align_double_strand<F: MatchFunc>(
 
     match alignment {
         // NB: we always align to the "forward strand"
-        Some(result) => (record, Some((result, true)), prealign_score),
-        None => (record, None, prealign_score),
+        Some(result) => (Some((result, true)), prealign_score),
+        None => (None, prealign_score),
     }
 }
 
 pub fn align_single_strand<F: MatchFunc>(
-    record: FastqOwnedRecord,
+    record: &FastqOwnedRecord,
     target_seq: &TargetSeq,
     target_hash: &TargetHash,
     aligners: &mut Aligners<F>,
     pre_align: bool,
     pre_align_min_score: i32,
-) -> (FastqOwnedRecord, Option<(Alignment, bool)>, Option<i32>) {
+) -> (Option<(Alignment, bool)>, Option<i32>) {
     let query = record.seq();
     let (banded_fwd, banded_revcomp, prealign_score) = maybe_prealign(
         query,
@@ -272,14 +272,14 @@ pub fn align_single_strand<F: MatchFunc>(
     };
 
     match (fwd, revcomp) {
-        (None, None) => (record, None, prealign_score),
-        (None, Some(r)) => (record, Some((r, false)), prealign_score),
-        (Some(f), None) => (record, Some((f, true)), prealign_score),
+        (None, None) => (None, prealign_score),
+        (None, Some(r)) => (Some((r, false)), prealign_score),
+        (Some(f), None) => (Some((f, true)), prealign_score),
         (Some(f), Some(r)) => {
             if f.score >= r.score {
-                (record, Some((f, true)), prealign_score)
+                (Some((f, true)), prealign_score)
             } else {
-                (record, Some((r, false)), prealign_score)
+                (Some((r, false)), prealign_score)
             }
         }
     }

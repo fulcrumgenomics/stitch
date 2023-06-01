@@ -4,6 +4,6 @@ use super::command::Command;
 
 impl Command for Align {
     fn execute(&self) -> anyhow::Result<()> {
-        todo!()
+        Align::execute(self)
     }
 }
