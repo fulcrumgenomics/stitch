@@ -22,9 +22,9 @@ use crate::align::alignment::Alignment;
 
 use super::constants::MIN_SCORE;
 use super::JumpInfo;
-use crate::align::traceback::cell::Traceback;
 use crate::align::traceback::traceback_single_stranded;
 use crate::align::traceback::Cell;
+use crate::align::traceback::Traceback;
 use crate::align::traceback::TracebackCell;
 use crate::align::traceback::TB_DEL;
 use crate::align::traceback::TB_INS;
