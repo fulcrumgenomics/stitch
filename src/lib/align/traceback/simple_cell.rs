@@ -111,7 +111,7 @@ impl TracebackCell for SimpleCell {
     #[inline(always)]
     fn get_s(self) -> SValue {
         let idx: u32 = (self.get_tb(TB_IDX_POS) << 4) as u32 | self.aux & AUX_IDX_MASK;
-        let from: u32 = (self.aux >> 4) as u32;
+        let from: u32 = self.aux >> 4;
 
         SValue {
             tb: self.get_tb(TB_S_POS),
