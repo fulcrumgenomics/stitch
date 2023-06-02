@@ -22,7 +22,7 @@ use crate::align::alignment::Alignment;
 
 use super::constants::MIN_SCORE;
 use super::JumpInfo;
-use crate::align::traceback::traceback_single_stranded;
+use crate::align::traceback::traceback;
 use crate::align::traceback::Cell;
 use crate::align::traceback::Traceback;
 use crate::align::traceback::TracebackCell;
@@ -81,7 +81,7 @@ use crate::align::traceback::TB_YCLIP_SUFFIX;
 ///
 /// `scoring` - see [`bio::alignment::pairwise::Scoring`](struct.Scoring.html)
 #[allow(non_snake_case)]
-pub struct SingleStrandAligner<F: MatchFunc> {
+pub struct SingleContigAligner<F: MatchFunc> {
     pub I: [Vec<i32>; 2],
     pub D: [Vec<i32>; 2],
     pub S: [Vec<i32>; 2],
@@ -90,17 +90,22 @@ pub struct SingleStrandAligner<F: MatchFunc> {
     pub Sn: Vec<i32>,
     pub traceback: Traceback,
     pub scoring: Scoring<F>,
+    pub contig_idx: u32,
     pub circular: bool,
 }
 
-impl Default for SingleStrandAligner<MatchParams> {
+impl Default for SingleContigAligner<MatchParams> {
     fn default() -> Self {
         let match_fn = MatchParams::new(1, -1);
-        SingleStrandAligner::new(-5, -1, -10, match_fn)
+        SingleContigAligner::new(-5, -1, -10, match_fn)
     }
 }
 
-impl<F: MatchFunc> SingleStrandAligner<F> {
+impl<F: MatchFunc> SingleContigAligner<F> {
+    pub fn set_contig_idx(&mut self, contig_idx: usize) {
+        self.contig_idx = contig_idx as u32;
+    }
+
     pub fn init_matrices(&mut self, m: usize, n: usize) {
         // initialize the traceback
         self.traceback.init(m, n);
@@ -121,7 +126,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             if k == 0 {
                 let mut tb = Cell::default();
                 tb.set_all(TB_START, 0);
-                tb.set_s_all(TB_START, 0, 0, false);
+                tb.set_s_all(TB_START, 0, self.contig_idx, 0);
                 self.traceback.set(0, 0, tb);
                 self.Lx.clear();
                 self.Lx.extend(repeat(0usize).take(n + 1));
@@ -136,7 +141,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             for i in 1..=m {
                 let mut tb = Cell::default();
                 tb.set_all(TB_START, 0);
-                tb.set_s_all(TB_START, 0, 0, false);
+                tb.set_s_all(TB_START, 0, self.contig_idx, 0);
                 if i == 1 {
                     self.I[k][i] = self.scoring.gap_open + self.scoring.gap_extend;
                     tb.set_i(TB_START, 1);
@@ -195,7 +200,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     pub fn init_column(&mut self, j: usize, curr: usize, m: usize, n: usize) {
         // Handle i = 0 case
         let mut tb = Cell::default();
-        tb.set_s_all(TB_START, 0, 0, false);
+        tb.set_s_all(TB_START, 0, self.contig_idx, 0);
         self.I[curr][0] = MIN_SCORE;
 
         // deletion
@@ -257,7 +262,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     ) -> JumpInfo {
         // add the specific addend!
         let jump_info = {
-            let mut info = jump_info.clone();
+            let mut info = jump_info;
             info.score += addend;
             info
         };
@@ -280,7 +285,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             return jump_info;
         }
 
-        // If equal, tie-break on teh longest alignment length
+        // If equal, tie-break on the longest alignment length
         let jump_from_end_s = self.traceback.get(m, j - 1).get_s();
         let jump_from_end_len = jump_from_end_s.len + 1;
         if jump_from_end_score == jump_info.score && jump_from_end_len <= jump_info.len {
@@ -290,9 +295,9 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         // return the zero-cost jump from the end
         JumpInfo {
             score: jump_from_end_score,
-            from: m as u32,
-            flip_strand: jump_from_end_s.flip_strand,
             len: jump_from_end_len,
+            idx: self.contig_idx,
+            from: m as u32,
         }
     }
 
@@ -364,17 +369,17 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             if diag_score >= best_s_score {
                 best_s_score = diag_score;
                 let s_tb = if p == q { TB_MATCH } else { TB_SUBST };
-                tb.set_s_all(s_tb, diag_len, (i - 1) as u32, false);
+                tb.set_s_all(s_tb, diag_len, self.contig_idx, (i - 1) as u32);
             }
             // Deletion
             if best_d_score > best_s_score {
                 best_s_score = best_d_score;
-                tb.set_s_all(TB_DEL, tb.get_d_len(), i as u32, false);
+                tb.set_s_all(TB_DEL, tb.get_d_len(), self.contig_idx, i as u32);
             }
             // Insertion
             if best_i_score > best_s_score {
                 best_s_score = best_i_score;
-                tb.set_s_all(TB_INS, tb.get_i_len(), (i - 1) as u32, false);
+                tb.set_s_all(TB_INS, tb.get_i_len(), self.contig_idx, (i - 1) as u32);
             }
             // Align the x[i-1] with y[j-1] through a jump move.
             let x_jump_info = self.get_jump_score_and_len(m, i, j, prev, addend, jump_info);
@@ -384,20 +389,16 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                     && x_jump_info.len > diag_len);
             if do_jump {
                 best_s_score = x_jump_info.score;
-                let x_jump_len = self
-                    .traceback
-                    .get(x_jump_info.from as usize, j - 1)
-                    .get_s_len()
-                    + 1;
                 let s_tb = if p == q { TB_MATCH } else { TB_SUBST };
-                tb.set_s_all(s_tb, x_jump_len, x_jump_info.from, x_jump_info.flip_strand);
+                tb.set_s_all(s_tb, x_jump_info.len, x_jump_info.idx, x_jump_info.from);
             }
+
             // X-prefix clip
             if xclip_score > best_s_score {
                 best_s_score = xclip_score;
                 let prev_len = self.traceback.get(0, j).get_s_len();
                 // tb.set_s_all(TB_XCLIP_PREFIX, prev_len + i as u32, 0, false);
-                tb.set_s_all(TB_XCLIP_PREFIX, prev_len, 0, false);
+                tb.set_s_all(TB_XCLIP_PREFIX, prev_len, self.contig_idx, 0);
             }
             // Y-prefix clip
             let yclip_score = self.scoring.yclip_prefix
@@ -407,7 +408,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 let prev_len = self.traceback.get(i, 0).get_s_len();
                 best_s_score = yclip_score;
                 // tb.set_s_all(TB_YCLIP_PREFIX, prev_len + j as u32, i as u32, false);
-                tb.set_s_all(TB_YCLIP_PREFIX, prev_len, i as u32, false);
+                tb.set_s_all(TB_YCLIP_PREFIX, prev_len, self.contig_idx, i as u32);
             }
 
             // Set the values in the matrices
@@ -429,13 +430,13 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                 };
             if do_x_suffix_clip {
                 self.S[curr][m] = self.S[curr][i] + self.scoring.xclip_suffix;
-                let prev_len = tb.get_s_len();
+                let prev_s: crate::align::traceback::SValue = tb.get_s();
                 self.traceback.get_mut(m, j).set_s_all(
                     TB_XCLIP_SUFFIX,
                     // prev_len + (m - i) as u32,
-                    prev_len,
+                    prev_s.len,
+                    prev_s.idx,
                     i as u32,
-                    false,
                 );
                 self.Lx[j] = m - i;
             }
@@ -472,12 +473,9 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             if self.S[curr][i] + self.scoring.jump_score > self.S[curr][m] {
                 self.S[curr][m] = self.S[curr][i] + self.scoring.jump_score;
                 let prev_s = self.traceback.get(i, j).get_s();
-                self.traceback.get_mut(m, j).set_s_all(
-                    TB_XJUMP,
-                    prev_s.len,
-                    i as u32,
-                    prev_s.flip_strand,
-                );
+                self.traceback
+                    .get_mut(m, j)
+                    .set_s_all(TB_XJUMP, prev_s.len, prev_s.idx, i as u32);
             }
 
             // y-clip
@@ -500,8 +498,8 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                     TB_YCLIP_SUFFIX,
                     // s_value.len + self.Ly[i] as u32,
                     s_value.len,
+                    s_value.idx,
                     i as u32,
-                    s_value.flip_strand,
                 );
             }
 
@@ -520,13 +518,13 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             if do_x_suffix_clip {
                 self.S[curr][m] = self.S[curr][i] + self.scoring.xclip_suffix;
                 self.Lx[j] = m - i;
-                let prev_len = self.traceback.get(i, j).get_s_len();
+                let prev_s = self.traceback.get(i, j).get_s();
                 self.traceback.get_mut(m, j).set_s_all(
                     TB_XCLIP_SUFFIX,
                     // prev_len + (m - i) as u32,
-                    prev_len,
+                    prev_s.len,
+                    prev_s.idx,
                     i as u32,
-                    false,
                 );
             }
         }
@@ -548,9 +546,12 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             if i_score > self.S[curr][i] {
                 self.S[curr][i] = i_score;
                 let prev_len = self.traceback.get_mut(i, j).get_i_len();
-                self.traceback
-                    .get_mut(i, j)
-                    .set_s_all(TB_INS, prev_len, (i - 1) as u32, false);
+                self.traceback.get_mut(i, j).set_s_all(
+                    TB_INS,
+                    prev_len,
+                    self.contig_idx,
+                    (i - 1) as u32,
+                );
                 if self.S[curr][i] + self.scoring.xclip_suffix > self.S[curr][m] {
                     self.S[curr][m] = self.S[curr][i] + self.scoring.xclip_suffix;
                     self.Lx[j] = m - i;
@@ -558,8 +559,8 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
                         TB_XCLIP_SUFFIX,
                         // prev_len + ((m - i) as u32),
                         prev_len,
+                        self.contig_idx,
                         i as u32,
-                        false,
                     );
                 }
             }
@@ -577,7 +578,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     /// * `match_fn` - function that returns the score for substitutions
     ///    (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
     pub fn new(gap_open: i32, gap_extend: i32, jump_score: i32, match_fn: F) -> Self {
-        SingleStrandAligner::with_capacity(
+        SingleContigAligner::with_capacity(
             DEFAULT_ALIGNER_CAPACITY,
             DEFAULT_ALIGNER_CAPACITY,
             gap_open,
@@ -610,7 +611,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
         assert!(gap_open <= 0, "gap_open can't be positive");
         assert!(gap_extend <= 0, "gap_extend can't be positive");
 
-        SingleStrandAligner {
+        SingleContigAligner {
             I: [Vec::with_capacity(m + 1), Vec::with_capacity(m + 1)],
             D: [Vec::with_capacity(m + 1), Vec::with_capacity(m + 1)],
             S: [Vec::with_capacity(m + 1), Vec::with_capacity(m + 1)],
@@ -619,6 +620,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             Sn: Vec::with_capacity(m + 1),
             traceback: Traceback::with_capacity(m, n),
             scoring: Scoring::new(gap_open, gap_extend, jump_score, match_fn),
+            contig_idx: 0,
             circular: false,
         }
     }
@@ -630,7 +632,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     /// * `scoring` - the scoring struct (see bio::alignment::pairwise::Scoring)
     #[allow(dead_code)]
     pub fn with_scoring(scoring: Scoring<F>) -> Self {
-        SingleStrandAligner::with_capacity_and_scoring(
+        SingleContigAligner::with_capacity_and_scoring(
             DEFAULT_ALIGNER_CAPACITY,
             DEFAULT_ALIGNER_CAPACITY,
             scoring,
@@ -665,7 +667,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             "Clipping penalty (y suffix) can't be positive"
         );
 
-        SingleStrandAligner {
+        SingleContigAligner {
             I: [Vec::with_capacity(m + 1), Vec::with_capacity(m + 1)],
             D: [Vec::with_capacity(m + 1), Vec::with_capacity(m + 1)],
             S: [Vec::with_capacity(m + 1), Vec::with_capacity(m + 1)],
@@ -674,6 +676,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             Sn: Vec::with_capacity(m + 1),
             traceback: Traceback::with_capacity(m, n),
             scoring,
+            contig_idx: 0,
             circular: false,
         }
     }
@@ -684,7 +687,7 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
     }
 
     /// Gets the best jump score and x-index for the jump
-    pub fn get_jump_info(&mut self, m: usize, j: usize) -> JumpInfo {
+    pub fn get_jump_info(&self, m: usize, j: usize) -> JumpInfo {
         let cur = j % 2;
 
         let mut best_jump_score = self.S[cur][0] + self.scoring.jump_score;
@@ -697,12 +700,12 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
             }
         }
 
-        let best_jump_len = self.traceback.get(best_jump_from as usize, j).get_s_len() + 1;
+        let best_jump_len = self.traceback.get(best_jump_from, j).get_s_len() + 1;
 
         JumpInfo {
             score: best_jump_score,
             from: best_jump_from as u32,
-            flip_strand: false,
+            idx: self.contig_idx,
             len: best_jump_len,
         }
     }
@@ -727,7 +730,6 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
             // Get the best jump score and x-index for the jump
             let jump_info = self.get_jump_info(m, j - 1);
-            eprintln!("j: {j} jump_info: {jump_info:?}");
 
             // Fill the column
             self.fill_column(x, y, m, n, j, prev, curr, jump_info);
@@ -735,7 +737,8 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
         self.fill_last_column_and_end_clipping(m, n);
 
-        traceback_single_stranded(self, m, n)
+        let aligners = vec![&*self];
+        traceback(&aligners, n)
     }
 
     /// Calculate global alignment of x against y.
@@ -791,9 +794,9 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
         // Filter out Yclip from alignment.operations
         {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xskip};
+            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xjump};
             alignment.operations.retain(|x| {
-                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xskip(_))
+                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xjump(_, _))
             });
         }
 
@@ -829,9 +832,9 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
         // Filter out Yclip from alignment.operations
         {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xskip};
+            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xjump};
             alignment.operations.retain(|x| {
-                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xskip(_))
+                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xjump(_, _))
             });
         }
 
@@ -867,9 +870,9 @@ impl<F: MatchFunc> SingleStrandAligner<F> {
 
         // Filter out Xclip and Yclip from alignment.operations
         {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xskip};
+            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xjump};
             alignment.operations.retain(|x| {
-                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xskip(_))
+                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xjump(_, _))
             });
         }
 
@@ -892,7 +895,7 @@ pub mod tests {
 
     use crate::align::alignment::Alignment;
 
-    use super::SingleStrandAligner;
+    use super::SingleContigAligner;
 
     /// Upper-cases and remove display-related characters from a string.
     fn s(bases: &str) -> Vec<u8> {
@@ -918,7 +921,7 @@ pub mod tests {
         assert_eq!(alignment.ystart, ystart, "ystart {alignment}");
         assert_eq!(alignment.yend, yend, "yend {alignment}");
         assert_eq!(alignment.score, score, "score {alignment}");
-        assert!(alignment.is_forward, "strand {alignment}");
+        assert_eq!(alignment.contig_idx, 0, "strand {alignment}");
         assert_eq!(alignment.cigar(), cigar, "cigar {alignment}");
         assert_eq!(alignment.length, length, "length {alignment}");
     }
@@ -928,7 +931,7 @@ pub mod tests {
     fn test_identical() {
         let x = s("ACGTAACC");
         let y = s("ACGTAACC");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 8, 0, 8, 8, "8=", 8);
     }
@@ -938,7 +941,7 @@ pub mod tests {
     fn test_single_mismatch() {
         let x = s("AACCGGTT");
         let y = s("AACCGtTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 8, 0, 8, 7 - 1, "5=1X2=", 8);
     }
@@ -948,7 +951,7 @@ pub mod tests {
     fn test_small_deletion() {
         let x = s("AACC-GTT");
         let y = s("AACCGGTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 7, 0, 8, 7 - (5 + 1), "4=1D3=", 8);
     }
@@ -958,7 +961,7 @@ pub mod tests {
     fn test_small_insertion() {
         let x = s("AACCGGTT");
         let y = s("AACC-GTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 8, 0, 7, 7 - (5 + 1), "4=1I3=", 8);
     }
@@ -968,7 +971,7 @@ pub mod tests {
     fn test_compensating_insertion_and_deletion() {
         let x = s("AAACGCGCGCGCG-TT");
         let y = s("-AACGCGCGCGCGTTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -986,7 +989,7 @@ pub mod tests {
     fn test_leading_insertion() {
         let x = s("ATTTTTTTTTTT");
         let y = s("-TTTTTTTTTTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 12, 0, 11, 11 - (5 + 1), "1I11=", 12);
     }
@@ -995,7 +998,7 @@ pub mod tests {
     fn test_trailing_insertion() {
         let x = s("TTTTTTTTTTTA");
         let y = s("TTTTTTTTTTT-");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 12, 0, 11, 11 - (5 + 1), "11=1I", 12);
     }
@@ -1004,7 +1007,7 @@ pub mod tests {
     fn test_leading_deletion() {
         let x = s("-TTTTTTTTTTT");
         let y = s("ATTTTTTTTTTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 11, 0, 12, 11 - (5 + 1), "1D11=", 12);
     }
@@ -1013,7 +1016,7 @@ pub mod tests {
     fn test_trailing_deletion() {
         let x = s("TTTTTTTTTTT-");
         let y = s("TTTTTTTTTTTA");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 11, 0, 12, 11 - (5 + 1), "11=1D", 12);
     }
@@ -1024,7 +1027,7 @@ pub mod tests {
         let x = s("ATTTTTTTTTTTA");
         let y = s("--TTTTTTTTTTt");
         let match_fn = MatchParams::new(1, -1);
-        let mut aligner = SingleStrandAligner::new(-3, -1, -10, match_fn);
+        let mut aligner = SingleContigAligner::new(-3, -1, -10, match_fn);
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -1044,7 +1047,7 @@ pub mod tests {
         let x = s("ATTTTTTTTTTTA");
         let y = s("-TTTTTTTTTTT-");
         let match_fn = MatchParams::new(1, -3);
-        let mut aligner = SingleStrandAligner::new(-3, -1, -10, match_fn);
+        let mut aligner = SingleContigAligner::new(-3, -1, -10, match_fn);
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -1062,7 +1065,7 @@ pub mod tests {
     fn test_left_justify_insertion_in_homopolymer() {
         let x = s("GTTTTTTTTTTA");
         let y = s("G-TTTTTTTTTA");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 12, 0, 11, 11 - (5 + 1), "1=1I10=", 12);
     }
@@ -1071,7 +1074,7 @@ pub mod tests {
     fn test_left_justify_insertion_in_triplet() {
         let x = s("GACGACGACGACGA");
         let y = s("---GACGACGACGA");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 14, 0, 11, 11 - (5 + 1) - 1 - 1, "3I11=", 14);
     }
@@ -1080,7 +1083,7 @@ pub mod tests {
     fn test_left_justify_insertion_in_triplet_with_leading_matches() {
         let x = s("TTTGACGACGACGACGA");
         let y = s("TTT---GACGACGACGA");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -1101,7 +1104,7 @@ pub mod tests {
     fn test_jump_over_deletion_in_triplet() {
         let x = s("TTTGACGACGA___CGA");
         let y = s("TTTGACGACGACGACGA");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         aligner.scoring.jump_score = -11;
         let alignment = aligner.global(&x, &y);
         assert_alignment(
@@ -1123,7 +1126,7 @@ pub mod tests {
     fn test_deletion_over_jump() {
         let x = s("TTT---GACGACGACGA");
         let y = s("TTTGACGACGACGACGA");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         aligner.scoring.jump_score = -11;
         let alignment = aligner.global(&x, &y);
         assert_alignment(
@@ -1145,7 +1148,7 @@ pub mod tests {
     fn test_jump_over_deletion() {
         let x = s("TTT___GACGACGACGA");
         let y = s("TTTGACGACGACGACGA");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         aligner.scoring.jump_score = -10;
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 14, 0, 17, 17 - 10, "6=3j11=", 17);
@@ -1158,7 +1161,7 @@ pub mod tests {
         let x = s("AAACCC");
         let y = s("AAcCCC");
         let match_fn = MatchParams::new(1, -3);
-        let mut aligner = SingleStrandAligner::new(-1, -1, -10, match_fn);
+        let mut aligner = SingleContigAligner::new(-1, -1, -10, match_fn);
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 6, 0, 6, 5 - 3, "2=1X3=", 6);
     }
@@ -1169,7 +1172,7 @@ pub mod tests {
         let y = s("AAcCCC");
         // NB: could be either "1I2=1D3=" or "2=1X3="
         let match_fn = MatchParams::new(1, -4);
-        let mut aligner = SingleStrandAligner::new(-1, -1, -10, match_fn);
+        let mut aligner = SingleContigAligner::new(-1, -1, -10, match_fn);
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 6, 0, 6, 5 - 4, "2=1X3=", 6);
     }
@@ -1183,7 +1186,7 @@ pub mod tests {
         // NB: could be either "1I2=1D3=" or "2=1X3="
         // NB: if we prefer a insertion over a deletion, then it would be 2M1D1I3M
         let match_fn = MatchParams::new(1, -5);
-        let mut aligner = SingleStrandAligner::new(-1, -1, -10, match_fn);
+        let mut aligner = SingleContigAligner::new(-1, -1, -10, match_fn);
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 6, 0, 6, 5 - (1 + 1) - (1 + 1), "1I2=1D3=", 7);
     }
@@ -1193,7 +1196,7 @@ pub mod tests {
         let x = s("ATTTTTTTTTTTA");
         let y = s("--TTTTTTTTTTt");
         let match_fn = MatchParams::new(1, -5);
-        let mut aligner = SingleStrandAligner::new(-100, -1, -10000, match_fn);
+        let mut aligner = SingleContigAligner::new(-100, -1, -10000, match_fn);
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -1212,7 +1215,7 @@ pub mod tests {
         let x = s("ATTTTTTTTTTTA");
         let y = s("-TTTTTTTTTTT-");
         let match_fn = MatchParams::new(1, -5);
-        let mut aligner = SingleStrandAligner::new(-1, -100, -10000, match_fn);
+        let mut aligner = SingleContigAligner::new(-1, -100, -10000, match_fn);
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -1230,7 +1233,7 @@ pub mod tests {
     fn test_querylocal_identical() {
         let x = s("ACGTAACC");
         let y = s("ACGTAACC");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.querylocal(&x, &y);
         assert_alignment(&alignment, 0, 8, 0, 8, 8, "8=", 8);
     }
@@ -1239,7 +1242,7 @@ pub mod tests {
     fn test_querylocal_identical_subsequence() {
         let x = s("  CCGG  ");
         let y = s("AACCGGTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.querylocal(&x, &y);
         assert_alignment(&alignment, 0, 4, 2, 6, 4, "4=", 4);
     }
@@ -1248,7 +1251,7 @@ pub mod tests {
     fn test_querylocal_subsequence_with_mismatch() {
         let x = s("       CGCGTCGTATACGTCGTT");
         let y = s("AAGATATCGCGTCGTATACGTCGTa");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.querylocal(&x, &y);
         assert_alignment(&alignment, 0, 18, 7, 25, 17 - 1, "17=1X", 18);
     }
@@ -1257,7 +1260,7 @@ pub mod tests {
     fn test_querylocal_subsequence_with_deletion() {
         let x = s("  CGCG-CGCG  ");
         let y = s("AACGCGACGCGTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.querylocal(&x, &y);
         assert_alignment(&alignment, 0, 8, 2, 11, 8 - (5 + 1), "4=1D4=", 9);
     }
@@ -1266,7 +1269,7 @@ pub mod tests {
     fn test_querylocal_insertion_when_x_longer_than_y() {
         let x = s("AAAAGGGGTTTT");
         let y = s("AAAA----TTTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.querylocal(&x, &y);
         assert_alignment(
             &alignment,
@@ -1284,7 +1287,7 @@ pub mod tests {
     fn test_global_leading_and_trailing_deletions() {
         let x = s("-------------------GGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTG---------------------------");
         let y = s("AGGGCTATAGACTGCTAGAGGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTGAAATGAGCTATTAGTCATGACGCTTTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         aligner.scoring.jump_score = -1000;
         let alignment = aligner.global(&x, &y);
         assert_alignment(
@@ -1303,7 +1306,7 @@ pub mod tests {
     fn test_querylocal_leading_and_trailing_deletions() {
         let x = s("-------------------GGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTG---------------------------");
         let y = s("AGGGCTATAGACTGCTAGAGGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTGAAATGAGCTATTAGTCATGACGCTTTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.querylocal(&x, &y);
         assert_alignment(&alignment, 0, 54, 19, 73, 54, "54=", 54);
     }
@@ -1312,7 +1315,7 @@ pub mod tests {
     fn test_local_identical() {
         let x = s("ACGTAACC");
         let y = s("ACGTAACC");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 0, 8, 0, 8, 8, "8=", 8);
     }
@@ -1321,7 +1324,7 @@ pub mod tests {
     fn test_local_identical_query_in_target() {
         let x = s("  CCGG  ");
         let y = s("AACCGGTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 0, 4, 2, 6, 4, "4=", 4);
     }
@@ -1330,7 +1333,7 @@ pub mod tests {
     fn test_local_identical_target_in_query() {
         let x = s("AACCGGTT");
         let y = s("  CCGG  ");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 2, 6, 0, 4, 4, "4=", 4);
     }
@@ -1340,7 +1343,7 @@ pub mod tests {
         // NB: first mismatch is not aligned
         let x = s("AGCGTCGTATACGTCGTA       ");
         let y = s("cGCGTCGTATACGTCGTAAAGATAT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 1, 18, 1, 18, 17, "17=", 17);
     }
@@ -1349,7 +1352,7 @@ pub mod tests {
     fn test_local_y_subsequence_with_a_trailing_mismatch() {
         let x = s("       CGCGTCGTATACGTCGTT");
         let y = s("AAGATATCGCGTCGTATACGTCGTa");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 0, 17, 7, 24, 17, "17=", 17); // NB: suffix clipping counts for two
     }
@@ -1358,7 +1361,7 @@ pub mod tests {
     fn test_local_y_subsequence_with_a_gap_in_x() {
         let x = s("  CCGCG-CGCGC  ");
         let y = s("AACCGCGACGCGCTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         aligner.scoring.gap_open = -3;
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 0, 10, 2, 13, 10 - (3 + 1), "5=1D5=", 11);
@@ -1368,7 +1371,7 @@ pub mod tests {
     fn test_local_y_subsequence_with_a_gap_in_y() {
         let x = s("AACCGCGACGCGCTT");
         let y = s("  CCGCG-CGCGC  ");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         aligner.scoring.gap_open = -3;
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 2, 13, 0, 10, 10 - (3 + 1), "5=1I5=", 11);
@@ -1379,7 +1382,7 @@ pub mod tests {
         let x = s("       CGCGCGCG");
         //                         ||||
         let y = s("AACGCGACGCGTT  ");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         aligner.scoring.gap_open = -3;
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 0, 4, 7, 11, 4, "4=", 4);
@@ -1389,7 +1392,7 @@ pub mod tests {
     fn test_local_zero_length_alignment() {
         let x = s("TTTTT");
         let y = s("AAAAA");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 0, 0, 0, 0, 0, "", 0);
     }
@@ -1403,7 +1406,7 @@ pub mod tests {
         // y:  TTTTTGATCGAT  ==> GATCGATCTTTTT
         let x = s("TTTTTGATCGAT________CTTTTT");
         let y = s("TTTTTGATCGATCGATCGATCTTTTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 18, 0, 26, 26 - 10, "13=8j13=", 26);
     }
@@ -1417,7 +1420,7 @@ pub mod tests {
         // y:  TTTTTGATCGATC ==> GATCGATCTTTTT
         let x = s("TTTTT________GATCGATCTTTTT");
         let y = s("TTTTTGATCGATCGATCGATCTTTTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.querylocal(&x, &y);
 
         assert_alignment(&alignment, 0, 18, 0, 26, 26 - 10, "13=8j13=", 26);
@@ -1432,7 +1435,7 @@ pub mod tests {
         // y:  GATCGATC==>GATCGATC
         let x = s("GATCGATC________");
         let y = s("GATCGATCGATCGATC");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 8, 0, 16, 16 - 10, "8=8j8=", 16);
     }
@@ -1446,7 +1449,7 @@ pub mod tests {
         // y:  GATCGATC==>GATCGATC==>GATCGATC
         let x = s("GATCGATC________________");
         let y = s("GATCGATCGATCGATCGATCGATC");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 8, 0, 24, 24 - 10 - 10, "8=8j8=8j8=", 24);
     }
@@ -1459,7 +1462,7 @@ pub mod tests {
         //    [0 ...... 9] [10 .... 19] [20 .... 29] [30 .... 39]
         let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTTT");
         let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -1481,7 +1484,7 @@ pub mod tests {
         //    [0 ...... 9] [10 .... 19] [20 .... 29] [30 .... 39]
         let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTTT");
         let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTT");
-        let mut aligner = SingleStrandAligner::default();
+        let mut aligner = SingleContigAligner::default();
         let alignment = aligner.querylocal(&x, &y);
         assert_alignment(
             &alignment,
@@ -1505,7 +1508,7 @@ pub mod tests {
         //    [0 ...... 9] [10 .... 19] [20 .... 29] [30 .... 39]
         let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTTT");
         let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTT");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(
             &alignment,
@@ -1529,7 +1532,7 @@ pub mod tests {
         //    [0 ...... 9]
         let x = s("CCCCCCCCCAAAAAAAAAA");
         let y = s("AAAAAAAAAACCCCCCCCC");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 9, 19, 0, 10, 10, "10=", 10);
     }
@@ -1544,7 +1547,7 @@ pub mod tests {
         //    [0 ...... 9] [10 .... 19]
         let x = s("CCCCCCCCCCAAAAAAAAAA");
         let y = s("AAAAAAAAAACCCCCCCCCC");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 10, 10, 0, 20, 20 - 10, "10=20j10=", 20);
     }
@@ -1559,7 +1562,7 @@ pub mod tests {
         //    [9 ...... 18]
         let x = s("AAAAAAAAAACCCCCCCCC");
         let y = s("CCCCCCCCCAAAAAAAAAA");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 0, 10, 9, 19, 10, "10=", 10);
     }
@@ -1574,7 +1577,7 @@ pub mod tests {
         //    [0 ...... 9] [10 .... 19]
         let x = s("AAAAAAAAAACCCCCCCCCC");
         let y = s("CCCCCCCCCCAAAAAAAAAA");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 10, 10, 0, 20, 20 - 10, "10=20j10=", 20);
     }
@@ -1587,7 +1590,7 @@ pub mod tests {
         //    [0 ...... 9] [10 .... 19] [20 .... 29]
         let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCC");
         let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTTT");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(
             &alignment,
@@ -1609,7 +1612,7 @@ pub mod tests {
         //               [10 .... 19] [20 .... 29] [30 .... 39]
         let x = s("          AAAAAAAAAAGGGGGGGGGGCCCCCCCCCC");
         let y = s("TTTTTTTTTTAAAAAAAAAACCCCCCCCCCGGGGGGGGGG");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(
             &alignment,
@@ -1627,7 +1630,7 @@ pub mod tests {
     fn test_global_start_with_jump() {
         let x = s("TTTTTTTTTTAAAAAAAAAA");
         let y = s("          AAAAAAAAAA");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 20, 0, 10, 10 - 10, "10J10=", 10);
     }
@@ -1636,7 +1639,7 @@ pub mod tests {
     fn test_global_end_with_jump() {
         let x = s("AAAAAAAAAATTTTTTTTTT");
         let y = s("AAAAAAAAAA");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 20, 0, 10, 10 - 10, "10=10J", 10);
     }
@@ -1645,7 +1648,7 @@ pub mod tests {
     fn test_global_start_and_end_with_jump() {
         let x = s("TTTTTTTTTTAAAAAAAAAATTTTTTTTTT");
         let y = s("          AAAAAAAAAA");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 30, 0, 10, 10 - 10 - 10, "10J10=10J", 10);
     }
@@ -1656,8 +1659,8 @@ pub mod tests {
         let y = s("ACGT");
         // disallows mismatches and gaps, but allows jumps
         let match_fn = MatchParams::new(1, -100_000);
-        let mut aligner: SingleStrandAligner<MatchParams> =
-            SingleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        let mut aligner: SingleContigAligner<MatchParams> =
+            SingleContigAligner::new(-100_000, -100_000, -1, match_fn);
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 0, 4, 0, 4, 4 - 1 - 1 - 1, "1=1J1=2j1=1J1=", 4);
     }
@@ -1668,7 +1671,7 @@ pub mod tests {
         let y = s("AACCGGT");
         // disallows mismatches and gaps, but allows jumps
         let match_fn = MatchParams::new(1, -100_000);
-        let mut aligner = SingleStrandAligner::new(-100_000, -100_000, -2, match_fn);
+        let mut aligner = SingleContigAligner::new(-100_000, -100_000, -2, match_fn);
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 0, 4, 0, 6, 6 - 2 - 2, "2=2J2=4j2=", 6);
     }
@@ -1681,7 +1684,7 @@ pub mod tests {
         //    [0 ...... 9] [10 .... 19] [20 .... 29]
         let x = s("AAAAAAAAAAGGGGGGGGGGCCCCCCCCCCTTTTTTTTT");
         let y = s("AAAAAAAAAACCCCCCCCCCGGGGGGGGGGTTTTTTTTT");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(
             &alignment,
@@ -1701,7 +1704,7 @@ pub mod tests {
         let y = s("ACCGGTT");
         // disallows mismatches and gaps, but allows jumps
         let match_fn = MatchParams::new(1, -100_000);
-        let mut aligner = SingleStrandAligner::new(-100_000, -100_000, -2, match_fn);
+        let mut aligner = SingleContigAligner::new(-100_000, -100_000, -2, match_fn);
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 3, 7, 1, 7, 6 - 2 - 2, "2=4j2=2J2=", 6);
     }
@@ -1714,7 +1717,7 @@ pub mod tests {
         //              [10 .... 19] [20 .... 29] [30 .... 39]
         let x = s("TTTTTTTTTCCCCCCCCCCGGGGGGGGGGAAAAAAAAAA");
         let y = s("TTTTTTTTTGGGGGGGGGGCCCCCCCCCCAAAAAAAAAA");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         let alignment = aligner.local(&x, &y);
         assert_alignment(
             &alignment,
@@ -1736,7 +1739,7 @@ pub mod tests {
         //              [10 .... 19] [20 .... 29] [30 .... 39]
         let x = s("TTTTTTTTTCCCCCCCCCCGGGGGGGGGGAAAAAAAAAA");
         let y = s("TTTTTTTTTGGGGGGGGGGCCCCCCCCCCAAAAAAAAAA");
-        let mut aligner: SingleStrandAligner<MatchParams> = SingleStrandAligner::default();
+        let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
         aligner.scoring.jump_score = -10;
         let alignment = aligner.local(&x, &y);
         assert_alignment(
@@ -1756,7 +1759,7 @@ pub mod tests {
         let x = s("AAGGCCTT");
         let y = s("AACCGGTT");
         let match_fn = MatchParams::new(1, -100_000);
-        let mut aligner = SingleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        let mut aligner = SingleContigAligner::new(-100_000, -100_000, -1, match_fn);
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 8, 0, 8, 8 - 1 - 1 - 1, "2=2J2=4j2=2J2=", 8);
     }
@@ -1766,7 +1769,7 @@ pub mod tests {
         let x = s("AACCGGTT");
         let y = s("TTAA");
         let match_fn = MatchParams::new(1, -100_000);
-        let mut aligner = SingleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        let mut aligner = SingleContigAligner::new(-100_000, -100_000, -1, match_fn);
         aligner.set_circular(true);
         let alignment = aligner.local(&x, &y);
         assert_alignment(&alignment, 6, 2, 0, 4, 4, "2=8j2=", 4);
@@ -1777,7 +1780,7 @@ pub mod tests {
         let x = s("GGTTAACC");
         let y = s("AACCGGTT");
         let match_fn = MatchParams::new(1, -100_000);
-        let mut aligner = SingleStrandAligner::new(-100_000, -100_000, -1, match_fn);
+        let mut aligner = SingleContigAligner::new(-100_000, -100_000, -1, match_fn);
         aligner.set_circular(true);
         let alignment = aligner.targetlocal(&x, &y);
         assert_alignment(&alignment, 4, 4, 0, 8, 8, "4=8j4=", 8);

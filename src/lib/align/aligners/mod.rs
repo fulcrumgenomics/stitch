@@ -15,9 +15,7 @@ use crate::util::target_seq::{TargetHash, TargetSeq};
 use itertools::{self, Itertools};
 
 use crate::align::aligners::constants::{AlignmentMode, MIN_SCORE};
-use crate::align::aligners::{
-    double_strand::DoubleStrandAligner, single_strand::SingleStrandAligner,
-};
+use crate::align::aligners::multi_contig_aligner::MultiContigAligner;
 use crate::align::alignment::Alignment;
 use crate::align::scoring::Scoring;
 use bio::alignment::pairwise::banded::Aligner as BandedAligner;
@@ -42,138 +40,167 @@ use noodles::sam::record::Sequence;
 use seq_io::fastq::OwnedRecord as FastqOwnedRecord;
 use seq_io::fastq::Record as FastqRecord;
 
+use self::constants::DEFAULT_ALIGNER_CAPACITY;
+
 use super::sub_alignment::SubAlignmentBuilder;
 
 pub(crate) mod constants;
-pub(crate) mod double_strand;
 pub(crate) mod multi_contig_aligner;
-pub(crate) mod single_strand;
+pub(crate) mod single_contig_aligner;
 
 #[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
 pub struct JumpInfo {
     score: i32,
-    from: u32,
-    flip_strand: bool,
     len: u32,
+    idx: u32,
+    from: u32,
 }
 
-impl JumpInfo {
-    pub fn flip_strand(&self) -> Self {
-        JumpInfo {
-            flip_strand: !self.flip_strand,
-            ..*self
-        }
-    }
+struct ScoringBuilder {
+    pub match_score: i32,
+    pub mismatch_score: i32,
+    pub gap_open: i32,
+    pub gap_extend: i32,
+    pub jump_score: i32,
+    pub xclip_prefix: i32,
+    pub xclip_suffix: i32,
+    pub yclip_prefix: i32,
+    pub yclip_suffix: i32,
 }
 
-pub struct Aligners<F: MatchFunc> {
-    banded: BandedAligner<F>,
-    single_strand: SingleStrandAligner<F>,
-    double_strand: DoubleStrandAligner<F>,
-}
-
-impl Aligners<MatchParams> {
+impl ScoringBuilder {
     fn build_match_fn(match_score: i32, mismatch_score: i32) -> MatchParams {
         MatchParams::new(match_score, mismatch_score)
     }
 
-    fn build_stranded_scoring(
-        opts: &Align,
-        xclip_prefix: i32,
-        xclip_suffix: i32,
-        yclip_prefix: i32,
-        yclip_suffix: i32,
-    ) -> Scoring<MatchParams> {
+    pub fn build_scoring(&self) -> Scoring<MatchParams> {
         let mut scoring = Scoring::new(
-            opts.gap_open,
-            opts.gap_extend,
-            opts.jump_score,
-            Self::build_match_fn(opts.match_score, opts.mismatch_score),
+            self.gap_open,
+            self.gap_extend,
+            self.jump_score,
+            Self::build_match_fn(self.match_score, self.mismatch_score),
         );
-        scoring.xclip_prefix = xclip_prefix;
-        scoring.xclip_suffix = xclip_suffix;
-        scoring.yclip_prefix = yclip_prefix;
-        scoring.yclip_suffix = yclip_suffix;
+        scoring.xclip_prefix = self.xclip_prefix;
+        scoring.xclip_suffix = self.xclip_suffix;
+        scoring.yclip_prefix = self.yclip_prefix;
+        scoring.yclip_suffix = self.yclip_suffix;
         scoring
     }
 
-    pub fn new(opts: &Align, target_seq_len: usize) -> Aligners<MatchParams> {
-        let (xclip_prefix, xclip_suffix, yclip_prefix, yclip_suffix) = match opts.mode {
-            AlignmentMode::Local => (0, 0, 0, 0),
-            AlignmentMode::QueryLocal => (MIN_SCORE, MIN_SCORE, 0, 0),
-            AlignmentMode::TargetLocal => (0, 0, MIN_SCORE, MIN_SCORE),
-            AlignmentMode::Global => (MIN_SCORE, MIN_SCORE, MIN_SCORE, MIN_SCORE),
-            AlignmentMode::Custom => panic!("Custom alignment mode not supported"), // TODO: move to main run method
-        };
-
-        // Banded alignment is always local since the goal is to find at leaset some minimal scoring
-        // local alignment.
-        let banded_scoring = {
-            let mut scoring = BioScoring::new(
-                opts.gap_open,
-                opts.gap_extend,
-                Self::build_match_fn(opts.match_score, opts.mismatch_score),
-            );
-            scoring.xclip_prefix = 0;
-            scoring.xclip_suffix = 0;
-            scoring.yclip_prefix = 0;
-            scoring.yclip_suffix = 0;
-            scoring
-        };
-        let banded = BandedAligner::with_capacity_and_scoring(
-            10000,
-            target_seq_len,
-            banded_scoring,
-            opts.k,
-            opts.w,
+    pub fn build_bio_scoring(&self) -> BioScoring<MatchParams> {
+        let mut scoring = BioScoring::new(
+            self.gap_open,
+            self.gap_extend,
+            Self::build_match_fn(self.match_score, self.mismatch_score),
         );
+        scoring.xclip_prefix = self.xclip_prefix;
+        scoring.xclip_suffix = self.xclip_suffix;
+        scoring.yclip_prefix = self.yclip_prefix;
+        scoring.yclip_suffix = self.yclip_suffix;
+        scoring
+    }
+}
 
-        let single_strand = {
-            let mut aligner = SingleStrandAligner::with_capacity_and_scoring(
-                10000,
-                target_seq_len,
-                Self::build_stranded_scoring(
-                    opts,
-                    xclip_prefix,
-                    xclip_suffix,
-                    yclip_prefix,
-                    yclip_suffix,
-                ),
-            );
-            aligner.set_circular(opts.circular);
-            aligner
-        };
-        let double_strand: DoubleStrandAligner<MatchParams> = {
-            let scoring_fwd = Self::build_stranded_scoring(
-                &opts.clone(),
-                xclip_prefix,
-                xclip_suffix,
-                yclip_prefix,
-                yclip_suffix,
-            );
-            let scoring_rev = Self::build_stranded_scoring(
-                &opts.clone(),
-                xclip_prefix,
-                xclip_suffix,
-                yclip_prefix,
-                yclip_suffix,
-            );
+pub struct Aligners<'a, F: MatchFunc> {
+    // Aligner used to quickly determine if there are ANY high-quality local alignments.
+    banded: BandedAligner<MatchParams>,
+    // Aligner used when there are more than one contig (or double strand, or both)
+    multi_contig: MultiContigAligner<'a, F>,
+}
 
-            let mut aligner = DoubleStrandAligner::with_capacity_and_scoring(
-                10000,
-                target_seq_len,
-                scoring_fwd,
-                scoring_rev,
-            );
-            aligner.set_circular(opts.circular);
-            aligner
-        };
+pub fn build_aligners<'a>(opts: &Align, target_seqs: &'a [TargetSeq]) -> Aligners<'a, MatchParams> {
+    let (xclip_prefix, xclip_suffix, yclip_prefix, yclip_suffix) = match opts.mode {
+        AlignmentMode::Local => (0, 0, 0, 0),
+        AlignmentMode::QueryLocal => (MIN_SCORE, MIN_SCORE, 0, 0),
+        AlignmentMode::TargetLocal => (0, 0, MIN_SCORE, MIN_SCORE),
+        AlignmentMode::Global => (MIN_SCORE, MIN_SCORE, MIN_SCORE, MIN_SCORE),
+        AlignmentMode::Custom => panic!("Custom alignment mode not supported"), // TODO: move to main run method
+    };
+    let scoring_builder = ScoringBuilder {
+        match_score: opts.match_score,
+        mismatch_score: opts.mismatch_score,
+        gap_open: opts.gap_open,
+        gap_extend: opts.gap_extend,
+        jump_score: opts.jump_score,
+        xclip_prefix,
+        xclip_suffix,
+        yclip_prefix,
+        yclip_suffix,
+    };
 
-        Self {
-            banded,
-            single_strand,
-            double_strand,
+    // Banded alignment is always local since the goal is to find at leaset some minimal scoring
+    // local alignment.
+    let banded = BandedAligner::with_capacity_and_scoring(
+        DEFAULT_ALIGNER_CAPACITY,
+        DEFAULT_ALIGNER_CAPACITY,
+        scoring_builder.build_bio_scoring(),
+        opts.k,
+        opts.w,
+    );
+
+    let mut multi_contig: MultiContigAligner<'a, MatchParams> = MultiContigAligner::new();
+    for target_seq in target_seqs {
+        let opts = &opts.clone();
+        multi_contig.add_contig(
+            &target_seq.name,
+            true,
+            &target_seq.fwd,
+            opts.circular,
+            scoring_builder.build_scoring(),
+        );
+    }
+    if opts.double_strand {
+        for target_seq in target_seqs {
+            multi_contig.add_contig(
+                &target_seq.name,
+                false,
+                &target_seq.revcomp,
+                opts.circular,
+                scoring_builder.build_scoring(),
+            );
         }
+    }
+    Aligners {
+        banded,
+        multi_contig,
+    }
+}
+
+impl Aligners<'_, MatchParams> {
+    pub fn align(
+        &mut self,
+        record: &FastqOwnedRecord,
+        target_seq: &[TargetSeq],
+        target_hashes: &[TargetHash],
+        pre_align: bool,
+        pre_align_min_score: i32,
+    ) -> (Option<Alignment>, Option<i32>) {
+        let query = record.seq();
+        // Align the record to all the targets in a local banded alignment. If there is at least one
+        // alignment with minimum score, then align uses the full aligner.
+        // TODO: we could align to the subset of targets that had a "good enough" local banded
+        // alignment.  Hmmn.
+        let mut alignment: Option<Alignment> = None;
+        let mut prealign_score: Option<i32> = None;
+        for (index, target_seq) in target_seq.iter().enumerate() {
+            let target_hash = &target_hashes[index];
+            let (banded_fwd, banded_revcomp, cur_prealign_score) = maybe_prealign(
+                query,
+                target_seq,
+                target_hash,
+                &mut self.banded,
+                pre_align,
+                Some(pre_align_min_score),
+            );
+            if banded_fwd.map_or(true, |score| score >= pre_align_min_score)
+                || banded_revcomp.map_or(true, |score| score >= pre_align_min_score)
+            {
+                alignment = Some(self.multi_contig.custom(query));
+                prealign_score = cur_prealign_score;
+                break;
+            }
+        }
+        (alignment, prealign_score)
     }
 }
 
@@ -226,89 +253,6 @@ fn maybe_prealign<F: MatchFunc>(
     (banded_fwd, banded_revcomp, prealign_score)
 }
 
-pub fn align_double_strand<F: MatchFunc>(
-    record: &FastqOwnedRecord,
-    target_seq: &TargetSeq,
-    target_hash: &TargetHash,
-    aligners: &mut Aligners<F>,
-    pre_align: bool,
-    pre_align_min_score: i32,
-) -> (Option<(Alignment, bool)>, Option<i32>) {
-    let query = record.seq();
-
-    let (banded_fwd, banded_revcomp, prealign_score) = maybe_prealign(
-        query,
-        target_seq,
-        target_hash,
-        &mut aligners.banded,
-        pre_align,
-        Some(pre_align_min_score),
-    );
-
-    let alignment = {
-        if banded_fwd.map_or(true, |score| score >= pre_align_min_score)
-            || banded_revcomp.map_or(true, |score| score >= pre_align_min_score)
-        {
-            Some(
-                aligners
-                    .double_strand
-                    .custom(&target_seq.fwd, &target_seq.revcomp, query),
-            )
-        } else {
-            None
-        }
-    };
-
-    match alignment {
-        // NB: we always align to the "forward strand"
-        Some(result) => (Some((result, true)), prealign_score),
-        None => (None, prealign_score),
-    }
-}
-
-pub fn align_single_strand<F: MatchFunc>(
-    record: &FastqOwnedRecord,
-    target_seq: &TargetSeq,
-    target_hash: &TargetHash,
-    aligners: &mut Aligners<F>,
-    pre_align: bool,
-    pre_align_min_score: i32,
-) -> (Option<(Alignment, bool)>, Option<i32>) {
-    let query = record.seq();
-    let (banded_fwd, banded_revcomp, prealign_score) = maybe_prealign(
-        query,
-        target_seq,
-        target_hash,
-        &mut aligners.banded,
-        pre_align,
-        None,
-    );
-
-    let fwd: Option<Alignment> = if banded_fwd.map_or(true, |score| score >= pre_align_min_score) {
-        Some(aligners.single_strand.custom(&target_seq.fwd, query))
-    } else {
-        None
-    };
-    let revcomp = if banded_revcomp.map_or(true, |score| score >= pre_align_min_score) {
-        Some(aligners.single_strand.custom(&target_seq.revcomp, query))
-    } else {
-        None
-    };
-
-    match (fwd, revcomp) {
-        (None, None) => (None, prealign_score),
-        (None, Some(r)) => (Some((r, false)), prealign_score),
-        (Some(f), None) => (Some((f, true)), prealign_score),
-        (Some(f), Some(r)) => {
-            if f.score >= r.score {
-                (Some((f, true)), prealign_score)
-            } else {
-                (Some((r, false)), prealign_score)
-            }
-        }
-    }
-}
-
 fn header_to_name(header: &[u8]) -> Result<String> {
     let header: std::borrow::Cow<str> = String::from_utf8_lossy(header);
     header
@@ -320,13 +264,13 @@ fn header_to_name(header: &[u8]) -> Result<String> {
 
 pub fn to_records<F: MatchFunc>(
     fastq: &FastqOwnedRecord,
-    result: Option<(Alignment, bool)>,
+    result: Option<Alignment>,
     hard_clip: bool,
     use_eq_and_x: bool,
     alt_score: Option<i32>,
     scoring: &Scoring<F>,
     pick_primary: PrimaryPickingStrategy,
-    target_len: usize,
+    target_seqs: &[TargetSeq],
 ) -> Result<Vec<SamRecord>> {
     let name = header_to_name(fastq.head())?;
     let read_name: SamReadName = name.parse()?;
@@ -335,7 +279,7 @@ pub fn to_records<F: MatchFunc>(
 
     let mut builder = SubAlignmentBuilder::new(use_eq_and_x);
 
-    if let Some((alignment, is_fwd)) = result {
+    if let Some(alignment) = result {
         let subs = builder.build(&alignment, true, scoring);
         ensure!(!subs.is_empty());
 
@@ -362,7 +306,8 @@ pub fn to_records<F: MatchFunc>(
             .map(|(index, sub)| {
                 let is_secondary = index != primary_index;
                 let mut record = SamRecord::default();
-                let is_forward: bool = is_fwd == sub.is_forward;
+                assert!(sub.contig_idx < 2 * target_seqs.len());
+                let is_forward: bool = sub.contig_idx < target_seqs.len();
 
                 // read name
                 *record.read_name_mut() = Some(read_name.clone());
@@ -439,12 +384,13 @@ pub fn to_records<F: MatchFunc>(
                 *record.cigar_mut() = Cigar::try_from(cigar_ops).unwrap();
 
                 // target id
-                *record.reference_sequence_id_mut() = Some(0usize);
+                *record.reference_sequence_id_mut() = Some(sub.contig_idx % target_seqs.len());
 
                 // target start
                 if is_forward {
                     *record.alignment_start_mut() = Position::new(sub.target_start + 1);
                 } else {
+                    let target_len = target_seqs[sub.contig_idx % target_seqs.len()].len();
                     *record.alignment_start_mut() = Position::new(target_len - sub.target_end + 1);
                 }
 

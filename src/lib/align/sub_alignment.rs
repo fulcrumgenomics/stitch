@@ -11,11 +11,11 @@ use noodles::sam::record::cigar::op::Kind;
 /// A pairwise alignment with no jumps allowed.
 #[derive(Debug, Eq, PartialEq, Clone, Default)]
 pub struct SubAlignment {
+    pub contig_idx: usize,
     pub query_start: usize,
     pub query_end: usize,
     pub target_start: usize,
     pub target_end: usize,
-    pub is_forward: bool,
     pub cigar: Cigar,
     pub score: i32,
 }
@@ -31,7 +31,7 @@ pub struct SubAlignmentBuilder {
     query_offset: usize,
     target_offset: usize,
     score: i32,
-    is_forward: bool,
+    contig_idx: usize,
 }
 
 impl SubAlignmentBuilder {
@@ -45,6 +45,7 @@ impl SubAlignmentBuilder {
         }
     }
 
+    // TODO: score based on the _actual_ target and query sequences.
     fn add_op<F: MatchFunc>(
         &mut self,
         op: AlignmentOperation,
@@ -78,44 +79,25 @@ impl SubAlignmentBuilder {
                 self.elements.push(Op::new(Kind::Insertion, op_len));
                 None
             }
-            AlignmentOperation::Xskip(new_query_start) => {
+            // FIXME: contig
+            AlignmentOperation::Xjump(new_contig_idx, new_query_start) => {
                 let alignment = SubAlignment {
+                    contig_idx: self.contig_idx,
                     query_start: self.query_start,
                     query_end: self.query_offset,
                     target_start: self.target_start,
                     target_end: self.target_offset,
-                    is_forward: self.is_forward,
                     cigar: Cigar::try_from(self.elements.clone()).unwrap(),
                     score: self.score,
                 };
 
                 // reset
                 self.elements.clear();
+                self.contig_idx = new_contig_idx;
                 self.target_start = self.target_offset;
                 self.query_start = new_query_start;
                 self.query_offset = new_query_start;
                 self.score = 0;
-
-                Some(alignment)
-            }
-            AlignmentOperation::Xflip(new_query_start) => {
-                let alignment = SubAlignment {
-                    query_start: self.query_start,
-                    query_end: self.query_offset,
-                    target_start: self.target_start,
-                    target_end: self.target_offset,
-                    is_forward: self.is_forward,
-                    cigar: Cigar::try_from(self.elements.clone()).unwrap(),
-                    score: self.score,
-                };
-
-                // reset
-                self.elements.clear();
-                self.target_start = self.target_offset;
-                self.query_start = new_query_start;
-                self.query_offset = new_query_start;
-                self.score = 0;
-                self.is_forward = !self.is_forward;
 
                 Some(alignment)
             }
@@ -149,7 +131,7 @@ impl SubAlignmentBuilder {
             query_offset: 0,
             target_offset: 0,
             score: 0,
-            is_forward: true,
+            contig_idx: 0,
         }
     }
 
@@ -177,7 +159,7 @@ impl SubAlignmentBuilder {
         self.query_offset = self.query_start;
         self.target_offset = self.target_start;
         self.score = 0;
-        self.is_forward = alignment.is_forward;
+        self.contig_idx = alignment.contig_idx;
 
         let mut alignments = Vec::new();
         let mut last = alignment.operations[0];
@@ -202,9 +184,9 @@ impl SubAlignmentBuilder {
                 query_end: self.query_offset,
                 target_start: self.target_start,
                 target_end: self.target_offset,
-                is_forward: self.is_forward,
                 cigar: Cigar::try_from(self.elements.clone()).unwrap(),
                 score: self.score,
+                contig_idx: self.contig_idx,
             };
             alignments.push(alignment);
         }
@@ -217,9 +199,9 @@ impl SubAlignmentBuilder {
                     query_end: a.target_end,
                     target_start: a.query_start,
                     target_end: a.query_end,
-                    is_forward: a.is_forward,
                     cigar: Self::swap_cigar(&a.cigar),
                     score: a.score,
+                    contig_idx: a.contig_idx,
                 })
                 .collect_vec()
         } else {
