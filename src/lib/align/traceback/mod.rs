@@ -138,7 +138,7 @@ pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -
     let mut alignment_length = 0;
     for (cur_aligner_idx, cur_aligner) in aligners.iter().enumerate() {
         assert_eq!(cur_aligner_idx, cur_aligner.contig_idx as usize);
-        let m = cur_aligner.traceback.rows - 1;
+        let m: usize = cur_aligner.traceback.rows - 1;
         let cur_score = cur_aligner.S[n % 2][m];
         let cur_len = cur_aligner.traceback.get(m, n).get_s_len();
         // NB: If the scores equal, pick the one with the longer alignment length

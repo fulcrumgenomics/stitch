@@ -12,7 +12,9 @@ use crate::align::aligners::constants::MIN_SCORE;
 pub struct Scoring<F: MatchFunc> {
     pub gap_open: i32,
     pub gap_extend: i32,
-    pub jump_score: i32,
+    pub jump_score_same_contig_and_strand: i32,
+    pub jump_score_same_contig_opposite_strand: i32,
+    pub jump_score_inter_contig: i32,
     pub match_fn: F,
     pub match_scores: Option<(i32, i32)>,
     pub xclip_prefix: i32,
@@ -29,18 +31,58 @@ impl<F: MatchFunc> Scoring<F> {
     ///
     /// * `gap_open` - the score for opening a gap (should not be positive)
     /// * `gap_extend` - the score for extending a gap (should not be positive)
-    /// * `jump_score` - the score for jumping back in the query (should not be positive)
+    /// * `jump_score` - the score for jumping in the query (should not be positive)
     /// * `match_fn` - function that returns the score for substitutions
     ///    (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
-    pub fn new(gap_open: i32, gap_extend: i32, jump_score: i32, match_fn: F) -> Self {
+    pub fn with_jump_score(gap_open: i32, gap_extend: i32, jump_score: i32, match_fn: F) -> Self {
         assert!(gap_open <= 0, "gap_open can't be positive");
         assert!(gap_extend <= 0, "gap_extend can't be positive");
         assert!(jump_score <= 0, "jump_score can't be positive");
 
+        Self::with_jump_scores(
+            gap_open, gap_extend, jump_score, jump_score, jump_score, match_fn,
+        )
+    }
+
+    /// Create new Scoring instance with given gap open, gap extend penalties
+    /// and the score function. The clip penalties are set to [`MIN_SCORE`](constant.MIN_SCORE.html) by default
+    ///
+    /// # Arguments
+    ///
+    /// * `gap_open` - the score for opening a gap (should not be positive)
+    /// * `gap_extend` - the score for extending a gap (should not be positive)
+    /// * `jump_score_same_contig_and_strand` - the score for jumping to the same contig and strand in the query (should not be positive)
+    /// * `jump_score_same_contig_opposite_strand` - the score for jumping to the same contig and opposite strand in the query (should not be positive)
+    /// * `jump_score_inter_contig` - the score for jumping to a different contig in the query (should not be positive)
+    /// * `match_fn` - function that returns the score for substitutions
+    ///    (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
+    pub fn with_jump_scores(
+        gap_open: i32,
+        gap_extend: i32,
+        jump_score_same_contig_and_strand: i32,
+        jump_score_same_contig_opposite_strand: i32,
+        jump_score_inter_contig: i32,
+        match_fn: F,
+    ) -> Self {
+        assert!(
+            jump_score_same_contig_and_strand <= 0,
+            "jump_score_same_contig_and_strand can't be positive"
+        );
+        assert!(
+            jump_score_same_contig_opposite_strand <= 0,
+            "jump_score_same_contig_opposite_strand can't be positive"
+        );
+        assert!(
+            jump_score_inter_contig <= 0,
+            "jump_score_inter_contig can't be positive"
+        );
+
         Self {
             gap_open,
             gap_extend,
-            jump_score,
+            jump_score_same_contig_and_strand,
+            jump_score_same_contig_opposite_strand,
+            jump_score_inter_contig,
             match_fn,
             match_scores: None,
             xclip_prefix: MIN_SCORE,
@@ -48,6 +90,33 @@ impl<F: MatchFunc> Scoring<F> {
             yclip_prefix: MIN_SCORE,
             yclip_suffix: MIN_SCORE,
         }
+    }
+
+    /// Sets the jump scores to the given value
+    ///
+    /// # Arguments
+    ///
+    /// * `jump_score` - Jump score
+    #[allow(dead_code)]
+    pub fn set_jump_score(mut self, jump_score: i32) -> Self {
+        self.jump_score_same_contig_and_strand = jump_score;
+        self.jump_score_same_contig_opposite_strand = jump_score;
+        self.jump_score_inter_contig = jump_score;
+        self
+    }
+
+    /// Sets the jump scores to the given values
+    #[allow(dead_code)]
+    pub fn set_jump_scores(
+        mut self,
+        jump_score_same_contig_and_strand: i32,
+        jump_score_same_contig_opposite_strand: i32,
+        jump_score_inter_contig: i32,
+    ) -> Self {
+        self.jump_score_same_contig_and_strand = jump_score_same_contig_and_strand;
+        self.jump_score_same_contig_opposite_strand = jump_score_same_contig_opposite_strand;
+        self.jump_score_inter_contig = jump_score_inter_contig;
+        self
     }
 
     /// Sets the prefix and suffix clipping penalties for x to the input value
