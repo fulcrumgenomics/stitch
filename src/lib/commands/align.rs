@@ -1,25 +1,19 @@
-use crate::align::aligners::align_double_strand;
-use crate::align::aligners::align_single_strand;
 use crate::align::aligners::constants::AlignmentMode;
 use crate::align::aligners::to_records;
-use crate::align::aligners::Aligners;
 use crate::align::io::FastqGroupingIterator;
 use crate::align::io::FastqThreadReader;
 use crate::align::io::OutputMessage;
 use crate::align::io::OutputResult;
-use crate::align::io::BUFFER_SIZE;
 use crate::align::io::READER_CHANNEL_NUM_CHUNKS;
 use crate::align::scoring::Scoring;
 use crate::align::PrimaryPickingStrategy;
+use crate::util::target_seq::from_fasta;
 use crate::util::target_seq::TargetHash;
-use crate::util::target_seq::TargetSeq;
 use crate::util::version::built_info;
 use crate::util::version::built_info::VERSION;
-use anyhow::Context;
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use bio::alignment::pairwise::MatchParams;
 use clap::Parser;
-use fgoxide::io::Io;
 use flume::unbounded;
 use itertools::{self, Itertools};
 use log::info;
@@ -32,59 +26,14 @@ use noodles::sam::header::record::value::Map;
 use noodles::sam::header::Header as SamHeader;
 use proglog::CountFormatterKind;
 use proglog::ProgLogBuilder;
-use seq_io::fasta::Reader as FastaReader;
-use seq_io::fasta::Record as FastaRecord;
 use seq_io::fastq::OwnedRecord as FastqOwnedRecord;
 use std::env;
 use std::io;
-use std::io::BufRead;
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::time::Duration;
-
-/// Converts the FASTQ header (which may contain whitespaces) to a QNAME for the SAM format.
-fn header_to_name(header: &[u8]) -> Result<String> {
-    let header: std::borrow::Cow<str> = String::from_utf8_lossy(header);
-    header
-        .split_whitespace()
-        .next()
-        .map(std::string::ToString::to_string)
-        .context("empty read name")
-}
-
-/// Reads a FASTA containing a single target contig for the vector/plasmid/construct against which
-/// to align.
-fn read_target(file: &PathBuf) -> Result<(Vec<u8>, String)> {
-    let fg_io: Io = Io::new(5, BUFFER_SIZE);
-    let source: FastaReader<Box<dyn BufRead + Send>> =
-        FastaReader::with_capacity(fg_io.new_reader(file)?, BUFFER_SIZE);
-
-    let sequences = source
-        .into_records()
-        .map(|r| r.unwrap_or_else(|_| panic!("Error reading FASTA")))
-        .collect_vec();
-    ensure!(!sequences.is_empty(), "Found no sequences in the FASTA");
-    ensure!(
-        sequences.len() == 1,
-        "Found multiple sequences in the FASTA"
-    );
-
-    let record = sequences
-        .first()
-        .context("No sequences found in the FASTA")?;
-
-    let sequence = record
-        .seq()
-        .to_owned()
-        .iter()
-        .map(u8::to_ascii_uppercase)
-        .collect_vec();
-
-    let name = header_to_name(record.head())?;
-    Ok((sequence, name))
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Align (main class) and it's impls
@@ -107,9 +56,11 @@ fn read_target(file: &PathBuf) -> Result<(Vec<u8>, String)> {
 /// the order in which the alignments occur.  Furthermore, the order of the records output by this
 /// tool are in the order in which they align the query/read sequence.
 ///
-/// If the input FASTQ may be sorted by read sequence (bases), then the aligner will be sped up,
-/// since it need only read align the first read in a run of consecutive reads that have the same
-/// read sequence.
+/// If the input FASTQ may be sorted by read sequence (bases), in which case the aligner will be
+/// sped up, since it need only read align the first read in a run of consecutive reads that have
+/// the same read sequence.
+///
+/// Multiple contigs in the input FASTA are supported.
 #[derive(Parser, Debug, Clone)]
 #[clap(version = built_info::VERSION.as_str(), term_width=0)]
 pub struct Align {
@@ -244,69 +195,6 @@ pub struct Align {
 }
 
 impl Align {
-    /// Aligns a chunk of records
-    fn align(
-        records: Vec<FastqOwnedRecord>,
-        opts: &Align,
-        target_seq: &TargetSeq,
-        target_hash: &TargetHash,
-        aligners: &mut Aligners<MatchParams>,
-    ) -> Vec<OutputResult> {
-        let iter = FastqGroupingIterator::new(records.into_iter());
-        let mut results: Vec<OutputResult> = Vec::new();
-
-        for group in iter {
-            let first: &FastqOwnedRecord = group.first().unwrap();
-            let (maybe_alignment_and_is_forward, maybe_score) = {
-                if opts.double_strand {
-                    align_double_strand(
-                        first,
-                        target_seq,
-                        target_hash,
-                        aligners,
-                        opts.pre_align,
-                        opts.pre_align_min_score,
-                    )
-                } else {
-                    align_single_strand(
-                        first,
-                        target_seq,
-                        target_hash,
-                        aligners,
-                        opts.pre_align,
-                        opts.pre_align_min_score,
-                    )
-                }
-            };
-            match (maybe_alignment_and_is_forward, maybe_score) {
-                (Some((alignment, is_forward)), Some(score)) => {
-                    for record in group {
-                        let alignment = alignment.clone();
-                        results.push((record, Some((alignment, is_forward)), Some(score)));
-                    }
-                }
-                (None, None) => {
-                    for record in group {
-                        results.push((record, None, None));
-                    }
-                }
-                (None, Some(score)) => {
-                    for record in group {
-                        results.push((record, None, Some(score)));
-                    }
-                }
-                (Some((alignment, is_forward)), None) => {
-                    for record in group {
-                        let alignment = alignment.clone();
-                        results.push((record, Some((alignment, is_forward)), None));
-                    }
-                }
-            };
-        }
-
-        results
-    }
-
     /// Executes the align command
     pub fn execute(&self) -> anyhow::Result<()> {
         info!("Starting alignment...");
@@ -326,7 +214,7 @@ impl Align {
             .build();
 
         // Read in the refefence/target FASTA
-        let (target_seq, target_name) = read_target(&self.ref_fasta)?;
+        let target_seqs = from_fasta(&self.ref_fasta)?;
 
         // Create the thread to read in the FASTQ records
         let reader =
@@ -341,24 +229,44 @@ impl Align {
             .map(|_| {
                 let to_align_rx = reader.to_align_rx.clone();
                 let shutdown_rx = shutdown_rx.clone();
-                let target_name = target_name.clone();
-                let target_seq = target_seq.clone();
-                let mut aligners = Aligners::new(self, target_seq.len());
                 let opts = self.clone();
+                let target_seqs = target_seqs.clone();
 
                 std::thread::spawn(move || {
-                    let target_seq = TargetSeq::new(&target_name, &target_seq);
-                    let target_hash = target_seq.build_target_hash(opts.k);
+                    let target_hashes: Vec<TargetHash> = target_seqs
+                        .iter()
+                        .map(|target_seq| target_seq.build_target_hash(opts.k))
+                        .collect();
+                    let mut aligners = crate::align::aligners::build_aligners(&opts, &target_seqs);
                     loop {
                         // Try to process one chunk of alignments
                         if let Ok(msg) = to_align_rx.try_recv() {
-                            let results = Self::align(
-                                msg.records,
-                                &opts,
-                                &target_seq,
-                                &target_hash,
-                                &mut aligners,
-                            );
+                            let iter = FastqGroupingIterator::new(msg.records.into_iter());
+                            let mut results: Vec<OutputResult> = Vec::new();
+                            for group in iter {
+                                let first: &FastqOwnedRecord = group.first().unwrap();
+                                let (maybe_alignment, maybe_score) = aligners.align(
+                                    first,
+                                    &target_seqs,
+                                    &target_hashes,
+                                    opts.pre_align,
+                                    opts.pre_align_min_score,
+                                );
+                                match maybe_alignment {
+                                    Some(alignment) => {
+                                        for record in group {
+                                            let alignment = alignment.clone();
+                                            results.push((record, Some(alignment), maybe_score));
+                                        }
+                                    }
+                                    None => {
+                                        for record in group {
+                                            results.push((record, None, maybe_score));
+                                        }
+                                    }
+                                };
+                            }
+
                             msg.oneshot
                                 .send(OutputMessage { results })
                                 .expect("Send failed");
@@ -381,21 +289,23 @@ impl Align {
             .set_compression_level(CompressionLevel::try_from(self.compression)?)
             .build_with_writer(stdout);
         let mut writer = BamWriter::from(encoder);
-        let header = SamHeader::builder()
-            .set_header(Map::default())
-            .add_program(
+        let header = {
+            let mut builder = SamHeader::builder().set_header(Map::default()).add_program(
                 "fqcv",
                 Map::<Program>::builder()
                     .set_name("fqcv")
                     .set_version(VERSION.clone())
                     .set_command_line(command_line)
                     .build()?,
-            )
-            .add_reference_sequence(
-                target_name.parse()?,
-                Map::<ReferenceSequence>::new(NonZeroUsize::try_from(target_seq.len())?),
-            )
-            .build();
+            );
+            for target_seq in &target_seqs {
+                builder = builder.add_reference_sequence(
+                    target_seq.name.parse()?,
+                    Map::<ReferenceSequence>::new(NonZeroUsize::try_from(target_seq.len())?),
+                )
+            }
+            builder.build()
+        };
         writer.write_header(&header)?;
 
         // Convert the alignments to SAM records
@@ -415,7 +325,7 @@ impl Align {
                         alt_score,
                         &scoring,
                         self.pick_primary,
-                        target_seq.len(),
+                        &target_seqs,
                     )?;
                     for record in &records {
                         writer.write_record(&header, record)?;

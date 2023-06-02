@@ -33,8 +33,8 @@ pub struct Alignment {
     /// Length of the query sequence (not aligned xlen, the original length of x!)
     pub xlen: usize,
 
-    /// If the aligmnent starts on the forward strand (used for double strand alignment)
-    pub is_forward: bool,
+    /// The contig index (0-based), corresponding to the aligner for the aligned contig.
+    pub contig_idx: usize,
 
     /// Vector of alignment operations
     pub operations: Vec<AlignmentOperation>,
@@ -51,6 +51,7 @@ impl Alignment {
         if self.operations.is_empty() {
             return cigar;
         }
+        let mut contig_idx = self.contig_idx;
         let mut x_index: i32 = self.xstart as i32;
         let mut last_op = self.operations.first().unwrap();
         let mut last_len = 0;
@@ -60,15 +61,18 @@ impl Alignment {
                 cigar.push_str(&format!(
                     "{}{}",
                     last_len,
-                    last_op.as_string(x_index as usize)
+                    last_op.as_string(contig_idx, x_index as usize)
                 ));
             }
             // Update
             if op.is_special() {
-                cigar.push_str(op.as_string(x_index as usize).as_str());
+                cigar.push_str(op.as_string(contig_idx, x_index as usize).as_str());
                 x_index += op.length_on_x(x_index);
                 last_op = op;
                 last_len = 0;
+                if let AlignmentOperation::Xjump(new_contig_index, _) = op {
+                    contig_idx = *new_contig_index;
+                }
             } else if op == last_op {
                 x_index += op.length_on_x(x_index);
                 last_len += 1;
@@ -82,78 +86,10 @@ impl Alignment {
             cigar.push_str(&format!(
                 "{}{}",
                 last_len,
-                last_op.as_string(x_index as usize)
+                last_op.as_string(contig_idx, x_index as usize)
             ));
         }
         cigar
-    }
-
-    /// Generates a padded text representation of the alignment for visualization. The returned
-    /// sequence will consist of three lines as follows (minus the labels on the left):
-    ///
-    /// query : ACGTGAACTGACT-ACTGTATGCG
-    /// align : |||||  |||||| ||||||||.|
-    /// target: ACGTG--CTGACTGACTGTATGGG
-    #[allow(dead_code)]
-    pub fn padded_string(&self, query: &[u8], target: &[u8]) -> (String, String, String) {
-        let mut query_buf: String = String::new();
-        let mut align_buf: String = String::new();
-        let mut target_buf: String = String::new();
-        // TODO: need to revcomp query/target if Xflip is contained...
-
-        let mut query_offset = self.xstart;
-        let mut target_offset = self.ystart;
-
-        self.operations.iter().for_each(|op| match *op {
-            AlignmentOperation::Match | AlignmentOperation::Subst => {
-                query_buf.push(query[query_offset] as char);
-                if *op == AlignmentOperation::Match {
-                    align_buf.push('|');
-                } else {
-                    align_buf.push('.');
-                }
-                target_buf.push(target[target_offset] as char);
-                query_offset += 1;
-                target_offset += 1;
-            }
-            AlignmentOperation::Ins => {
-                query_buf.push(query[query_offset] as char);
-                align_buf.push(' ');
-                target_buf.push('-');
-                query_offset += 1;
-            }
-            AlignmentOperation::Del => {
-                query_buf.push('-');
-                align_buf.push(' ');
-                target_buf.push(target[target_offset] as char);
-                target_offset += 1;
-            }
-            AlignmentOperation::Xflip(from_i) => {
-                if query_buf.chars().nth(query_buf.len() - 1).unwrap() != ' '
-                    && target_buf.chars().nth(target_buf.len() - 1).unwrap() != ' '
-                {
-                    query_buf.push('X');
-                    align_buf.push('X');
-                    target_buf.push('X');
-                }
-                query_offset = from_i;
-            }
-            AlignmentOperation::Xskip(from_i) => {
-                if query_buf.chars().nth(query_buf.len() - 1).unwrap() != ' '
-                    && target_buf.chars().nth(target_buf.len() - 1).unwrap() != ' '
-                {
-                    query_buf.push(' ');
-                    align_buf.push(' ');
-                    target_buf.push(' ');
-                }
-                query_offset = from_i;
-            }
-            AlignmentOperation::Xclip(from_i) => {
-                query_offset = from_i;
-            }
-            _ => panic!("Unknown operator: {op:?}"),
-        });
-        (query_buf, align_buf, target_buf)
     }
 }
 
@@ -161,13 +97,13 @@ impl fmt::Display for Alignment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "x-span: {}-{} y-span: {}-{} score: {} strand: {} cigar: {} aln-len: {}",
+            "contig-idx: {} x-span: {}-{} y-span: {}-{} score: {} cigar: {} aln-len: {}",
+            self.contig_idx,
             self.xstart,
             self.xend,
             self.ystart,
             self.yend,
             self.score,
-            if self.is_forward { "+" } else { "-" },
             self.cigar(),
             self.length
         )
