@@ -392,7 +392,6 @@ impl<F: MatchFunc> SingleContigAligner<F> {
                 let s_tb = if p == q { TB_MATCH } else { TB_SUBST };
                 tb.set_s_all(s_tb, x_jump_info.len, x_jump_info.idx, x_jump_info.from);
             }
-
             // X-prefix clip
             if xclip_score > best_s_score {
                 best_s_score = xclip_score;
@@ -470,8 +469,8 @@ impl<F: MatchFunc> SingleContigAligner<F> {
             let curr: usize = j % 2;
 
             // jump over the remaining i bases in x
-            if self.S[curr][i] + self.scoring.jump_score > self.S[curr][m] {
-                self.S[curr][m] = self.S[curr][i] + self.scoring.jump_score;
+            if self.S[curr][i] + self.scoring.jump_score_same_contig_and_strand > self.S[curr][m] {
+                self.S[curr][m] = self.S[curr][i] + self.scoring.jump_score_same_contig_and_strand;
                 let prev_s = self.traceback.get(i, j).get_s();
                 self.traceback
                     .get_mut(m, j)
@@ -619,7 +618,7 @@ impl<F: MatchFunc> SingleContigAligner<F> {
             Ly: Vec::with_capacity(m + 1),
             Sn: Vec::with_capacity(m + 1),
             traceback: Traceback::with_capacity(m, n),
-            scoring: Scoring::new(gap_open, gap_extend, jump_score, match_fn),
+            scoring: Scoring::with_jump_score(gap_open, gap_extend, jump_score, match_fn),
             contig_idx: 0,
             circular: false,
         }
@@ -687,15 +686,14 @@ impl<F: MatchFunc> SingleContigAligner<F> {
     }
 
     /// Gets the best jump score and x-index for the jump
-    pub fn get_jump_info(&self, m: usize, j: usize) -> JumpInfo {
+    pub fn get_jump_info(&self, m: usize, j: usize, jump_score: i32) -> JumpInfo {
         let cur = j % 2;
 
-        let mut best_jump_score = self.S[cur][0] + self.scoring.jump_score;
+        let mut best_jump_score = self.S[cur][0] + jump_score;
         let mut best_jump_from = 0;
-
         for k in 1..=m {
-            if best_jump_score < self.S[cur][k] + self.scoring.jump_score {
-                best_jump_score = self.S[cur][k] + self.scoring.jump_score;
+            if best_jump_score < self.S[cur][k] + jump_score {
+                best_jump_score = self.S[cur][k] + jump_score;
                 best_jump_from = k;
             }
         }
@@ -729,7 +727,8 @@ impl<F: MatchFunc> SingleContigAligner<F> {
             self.init_column(j, curr, m, n);
 
             // Get the best jump score and x-index for the jump
-            let jump_info = self.get_jump_info(m, j - 1);
+            let jump_info =
+                self.get_jump_info(m, j - 1, self.scoring.jump_score_same_contig_and_strand);
 
             // Fill the column
             self.fill_column(x, y, m, n, j, prev, curr, jump_info);
@@ -1105,7 +1104,7 @@ pub mod tests {
         let x = s("TTTGACGACGA___CGA");
         let y = s("TTTGACGACGACGACGA");
         let mut aligner = SingleContigAligner::default();
-        aligner.scoring.jump_score = -11;
+        aligner.scoring = aligner.scoring.set_jump_score(-11);
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -1127,7 +1126,7 @@ pub mod tests {
         let x = s("TTT---GACGACGACGA");
         let y = s("TTTGACGACGACGACGA");
         let mut aligner = SingleContigAligner::default();
-        aligner.scoring.jump_score = -11;
+        aligner.scoring = aligner.scoring.set_jump_score(-11);
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -1149,7 +1148,7 @@ pub mod tests {
         let x = s("TTT___GACGACGACGA");
         let y = s("TTTGACGACGACGACGA");
         let mut aligner = SingleContigAligner::default();
-        aligner.scoring.jump_score = -10;
+        aligner.scoring = aligner.scoring.set_jump_score(-10);
         let alignment = aligner.global(&x, &y);
         assert_alignment(&alignment, 0, 14, 0, 17, 17 - 10, "6=3j11=", 17);
     }
@@ -1288,7 +1287,7 @@ pub mod tests {
         let x = s("-------------------GGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTG---------------------------");
         let y = s("AGGGCTATAGACTGCTAGAGGTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTGAAATGAGCTATTAGTCATGACGCTTTT");
         let mut aligner = SingleContigAligner::default();
-        aligner.scoring.jump_score = -1000;
+        aligner.scoring = aligner.scoring.set_jump_score(-1000);
         let alignment = aligner.global(&x, &y);
         assert_alignment(
             &alignment,
@@ -1740,7 +1739,7 @@ pub mod tests {
         let x = s("TTTTTTTTTCCCCCCCCCCGGGGGGGGGGAAAAAAAAAA");
         let y = s("TTTTTTTTTGGGGGGGGGGCCCCCCCCCCAAAAAAAAAA");
         let mut aligner: SingleContigAligner<MatchParams> = SingleContigAligner::default();
-        aligner.scoring.jump_score = -10;
+        aligner.scoring = aligner.scoring.set_jump_score(-10);
         let alignment = aligner.local(&x, &y);
         assert_alignment(
             &alignment,

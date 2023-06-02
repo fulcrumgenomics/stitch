@@ -8,6 +8,7 @@
 use anyhow::{ensure, Context, Result};
 use bio::alignment::pairwise::MatchFunc;
 
+use crate::align::aligners::constants::AlignmentOperation::{Del, Ins, Match, Subst, Xjump};
 use crate::align::PrimaryPickingStrategy;
 use crate::commands::align::Align;
 use crate::util::dna::reverse_complement;
@@ -61,7 +62,9 @@ struct ScoringBuilder {
     pub mismatch_score: i32,
     pub gap_open: i32,
     pub gap_extend: i32,
-    pub jump_score: i32,
+    pub jump_score_same_contig_and_strand: i32,
+    pub jump_score_same_contig_opposite_strand: i32,
+    pub jump_score_inter_contig: i32,
     pub xclip_prefix: i32,
     pub xclip_suffix: i32,
     pub yclip_prefix: i32,
@@ -74,10 +77,12 @@ impl ScoringBuilder {
     }
 
     pub fn build_scoring(&self) -> Scoring<MatchParams> {
-        let mut scoring = Scoring::new(
+        let mut scoring = Scoring::with_jump_scores(
             self.gap_open,
             self.gap_extend,
-            self.jump_score,
+            self.jump_score_same_contig_and_strand,
+            self.jump_score_same_contig_opposite_strand,
+            self.jump_score_inter_contig,
             Self::build_match_fn(self.match_score, self.mismatch_score),
         );
         scoring.xclip_prefix = self.xclip_prefix;
@@ -121,7 +126,13 @@ pub fn build_aligners<'a>(opts: &Align, target_seqs: &'a [TargetSeq]) -> Aligner
         mismatch_score: opts.mismatch_score,
         gap_open: opts.gap_open,
         gap_extend: opts.gap_extend,
-        jump_score: opts.jump_score,
+        jump_score_same_contig_and_strand: opts
+            .jump_score_same_contig_and_strand
+            .unwrap_or(opts.jump_score),
+        jump_score_same_contig_opposite_strand: opts
+            .jump_score_same_contig_opposite_strand
+            .unwrap_or(opts.jump_score),
+        jump_score_inter_contig: opts.jump_score_inter_contig.unwrap_or(opts.jump_score),
         xclip_prefix,
         xclip_suffix,
         yclip_prefix,
@@ -195,7 +206,24 @@ impl Aligners<'_, MatchParams> {
             if banded_fwd.map_or(true, |score| score >= pre_align_min_score)
                 || banded_revcomp.map_or(true, |score| score >= pre_align_min_score)
             {
-                alignment = Some(self.multi_contig.custom(query));
+                let mut aln = self.multi_contig.custom(query);
+                let mode: AlignmentMode = AlignmentMode::Local; // FIXME: ened to know the mode
+                match mode {
+                    AlignmentMode::Local
+                    | AlignmentMode::QueryLocal
+                    | AlignmentMode::TargetLocal => {
+                        aln.operations.retain(|x| {
+                            *x == Match
+                                || *x == Subst
+                                || *x == Ins
+                                || *x == Del
+                                || matches!(*x, Xjump(_, _))
+                        });
+                    }
+                    AlignmentMode::Global => (), // do nothing
+                    AlignmentMode::Custom => unreachable!(),
+                }
+                alignment = Some(aln);
                 prealign_score = cur_prealign_score;
                 break;
             }

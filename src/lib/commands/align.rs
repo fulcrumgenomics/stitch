@@ -61,6 +61,16 @@ use std::time::Duration;
 /// the same read sequence.
 ///
 /// Multiple contigs in the input FASTA are supported.
+///
+/// ## Jump scores
+///
+/// The jump score can be specified with `--jump-score`.
+///
+/// The jump score may also be specified specific to the jump being within the same contig
+/// and the same strand (`--jump-score-same-contig-and-strand`), the same contig but opposite
+/// strand (`--jump-score-same-contig-opposite-strand`), and the across different contigs.
+/// (`--jump-score-inter-contig`).  If any of these options are not specified, then they will
+/// default to the the value specified by `--jump-score`.
 #[derive(Parser, Debug, Clone)]
 #[clap(version = built_info::VERSION.as_str(), term_width=0)]
 pub struct Align {
@@ -148,7 +158,7 @@ pub struct Align {
     )]
     pub gap_extend: i32,
 
-    /// Score for a target jump (must be negative)
+    /// Score for a target jump (must be negative).
     #[clap(
         long,
         short = 'J',
@@ -157,6 +167,18 @@ pub struct Align {
         display_order = 16
     )]
     pub jump_score: i32,
+
+    /// Score for a target jump within the same contig and strand (must be negative)
+    #[clap(long, allow_hyphen_values = true, display_order = 16)]
+    pub jump_score_same_contig_and_strand: Option<i32>,
+
+    /// Score for a target jump within the same contig and oppoosite strand (must be negative)
+    #[clap(long, allow_hyphen_values = true, display_order = 16)]
+    pub jump_score_same_contig_opposite_strand: Option<i32>,
+
+    /// Score for a target jump across different contigs (must be negative)
+    #[clap(long, allow_hyphen_values = true, display_order = 16)]
+    pub jump_score_inter_contig: Option<i32>,
 
     /// The alignment mode:
     /// - Local: aligns a sub-sequence of the read versus a sub-sequence of the reference.
@@ -302,7 +324,7 @@ impl Align {
                 builder = builder.add_reference_sequence(
                     target_seq.name.parse()?,
                     Map::<ReferenceSequence>::new(NonZeroUsize::try_from(target_seq.len())?),
-                )
+                );
             }
             builder.build()
         };
@@ -311,7 +333,16 @@ impl Align {
         // Convert the alignments to SAM records
         loop {
             let match_fn: MatchParams = MatchParams::new(self.match_score, self.mismatch_score);
-            let scoring = Scoring::new(self.gap_open, self.gap_extend, self.jump_score, match_fn);
+            let scoring = Scoring::with_jump_scores(
+                self.gap_open,
+                self.gap_extend,
+                self.jump_score_same_contig_and_strand
+                    .unwrap_or(self.jump_score),
+                self.jump_score_same_contig_opposite_strand
+                    .unwrap_or(self.jump_score),
+                self.jump_score_inter_contig.unwrap_or(self.jump_score),
+                match_fn,
+            );
             // Get a receiver for the alignment of a record
             if let Ok(receiver) = reader.to_output_rx.try_recv() {
                 let msg = receiver.recv()?;
