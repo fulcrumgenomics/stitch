@@ -55,12 +55,13 @@ pub const TB_YCLIP_SUFFIX: u16 = 0b1000; // suffix clip of y (8)
 pub const TB_XJUMP: u16 = 0b1001; // jump (9)
 pub const TB_MAX: u16 = 0b1001; // Useful in checking that the TB value we got is a valid one
 
+pub mod packed_length_cell;
+pub mod simple_cell;
+
 cfg_if::cfg_if! {
     if #[cfg(low_mem)] {
-        pub mod simple_cell;
         pub type Cell = simple_cell::SimpleCell;
     } else {
-        pub mod packed_length_cell;
         pub type Cell = packed_length_cell::PackedLengthCell;
     }
 }

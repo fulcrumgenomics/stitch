@@ -35,7 +35,6 @@ const TB_S_POS: u16 = 8;
 const TB_IDX_POS: u16 = 12;
 const TB_MASK: u16 = 0b1111;
 const AUX_IDX_MASK: u32 = 0b1111;
-const AUX_IDX_POS: u32 = 16;
 const AUX_FROM_MASK: u32 = 0b1111_1111_1111_1111_1111_1111_1111;
 
 impl SimpleCell {
@@ -68,21 +67,21 @@ impl TracebackCell for SimpleCell {
     }
 
     #[inline(always)]
-    fn set_i(&mut self, tb: u16, len: u32) {
+    fn set_i(&mut self, tb: u16, _len: u32) {
         // Traceback corresponding to matrix I
-        self.set_tb_bits(TB_I_POS, tb);
+        self.set_tb(TB_I_POS, tb);
     }
 
     #[inline(always)]
-    fn set_d(&mut self, tb: u16, len: u32) {
+    fn set_d(&mut self, tb: u16, _len: u32) {
         // Traceback corresponding to matrix D
-        self.set_tb_bits(TB_D_POS, tb);
+        self.set_tb(TB_D_POS, tb);
     }
 
     #[inline(always)]
-    fn set_s(&mut self, tb: u16, len: u32) {
+    fn set_s(&mut self, tb: u16, _len: u32) {
         // Traceback corresponding to matrix S
-        self.set_tb_bits(TB_S_POS, tb);
+        self.set_tb(TB_S_POS, tb);
     }
 
     /// Sets the S traceback with contig index and from information.
@@ -93,10 +92,10 @@ impl TracebackCell for SimpleCell {
         // Traceback corresponding to matrix S
         self.set_s(tb, len);
         // contig index (upper 4 bits, then lower 4bits)
-        self.set_tb_bits(TB_IDX_POS, (idx >> 4) as u16);
+        self.set_tb(TB_IDX_POS, (idx >> 4) as u16);
         self.aux = (self.aux & !AUX_IDX_MASK) | (idx & AUX_IDX_MASK);
         // contig from
-        self.aux = (self.aux & !AUX_FROM_MASK) | (from << 4); // contig
+        self.aux = (self.aux & !(AUX_FROM_MASK << 4)) | (from << 4); // contig
     }
 
     #[inline(always)]
@@ -178,6 +177,7 @@ pub mod tests {
     fn test_set_and_get_s() {
         let mut cell = SimpleCell::default();
         for tb in 0..=TB_MAX {
+            cell.set_s_all(0, 0, 0, 0);
             assert_eq!(
                 cell.get_s(),
                 SValue {
