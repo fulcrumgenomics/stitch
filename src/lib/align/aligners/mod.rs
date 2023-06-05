@@ -111,6 +111,8 @@ pub struct Aligners<'a, F: MatchFunc> {
     banded: BandedAligner<MatchParams>,
     // Aligner used when there are more than one contig (or double strand, or both)
     multi_contig: MultiContigAligner<'a, F>,
+    // The ailgnment mode
+    mode: AlignmentMode,
 }
 
 pub fn build_aligners<'a>(opts: &Align, target_seqs: &'a [TargetSeq]) -> Aligners<'a, MatchParams> {
@@ -174,6 +176,7 @@ pub fn build_aligners<'a>(opts: &Align, target_seqs: &'a [TargetSeq]) -> Aligner
     Aligners {
         banded,
         multi_contig,
+        mode: opts.mode,
     }
 }
 
@@ -207,8 +210,7 @@ impl Aligners<'_, MatchParams> {
                 || banded_revcomp.map_or(true, |score| score >= pre_align_min_score)
             {
                 let mut aln = self.multi_contig.custom(query);
-                let mode: AlignmentMode = AlignmentMode::Local; // FIXME: ened to know the mode
-                match mode {
+                match self.mode {
                     AlignmentMode::Local
                     | AlignmentMode::QueryLocal
                     | AlignmentMode::TargetLocal => {
