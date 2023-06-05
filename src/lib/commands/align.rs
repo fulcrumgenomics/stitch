@@ -211,8 +211,15 @@ pub struct Align {
     #[clap(long, short = 'C', default_value = "false", display_order = 19)]
     pub circular: bool,
 
+    /// When using `--circular`, re-align reads that may cross the target origin.  This may occur
+    /// when a prefix (or suffix) of the read is unaligned, and the alignment starts within the
+    /// slop of the target start (or target end).  In this case, the prefix is appended to the
+    /// aligned suffix and the new read is re-aligned.
+    #[clap(long, short = 'C', default_value = "20", display_order = 19)]
+    pub circular_slop: usize,
+
     /// The compression level of the output BAM
-    #[clap(long, short = 'c', default_value = "0", display_order = 20)]
+    #[clap(long, short = 'c', default_value = "0", display_order = 21)]
     pub compression: u8,
 }
 
@@ -236,7 +243,7 @@ impl Align {
             .build();
 
         // Read in the refefence/target FASTA
-        let target_seqs = from_fasta(&self.ref_fasta)?;
+        let target_seqs = from_fasta(&self.ref_fasta, self.circular)?;
 
         // Create the thread to read in the FASTQ records
         let reader =
@@ -273,6 +280,7 @@ impl Align {
                                     &target_hashes,
                                     opts.pre_align,
                                     opts.pre_align_min_score,
+                                    opts.circular_slop,
                                 );
                                 match maybe_alignment {
                                     Some(alignment) => {

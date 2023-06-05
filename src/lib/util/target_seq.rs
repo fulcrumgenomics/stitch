@@ -8,6 +8,7 @@ use fgoxide::io::Io;
 use itertools::{self, Itertools};
 use seq_io::fasta::Reader as FastaReader;
 use seq_io::fasta::Record as FastaRecord;
+use std::collections::HashMap;
 use std::io::BufRead;
 
 /// Contains the forward and reverse complement of a DNA sequence for a single contig.
@@ -16,6 +17,7 @@ pub struct TargetSeq {
     pub name: String,
     pub fwd: Vec<u8>,
     pub revcomp: Vec<u8>,
+    pub circular: bool,
 }
 
 /// Contains the k-mer hash for the forward and reverse complement of a DNA sequence for a single
@@ -28,11 +30,12 @@ pub struct TargetHash<'a> {
 
 impl TargetSeq {
     /// Creates a new `TargetSeq` for the contig with the given name and DNA sequence.
-    pub fn new(name: &str, seq: &Vec<u8>) -> Self {
+    pub fn new(name: &str, seq: &Vec<u8>, circular: bool) -> Self {
         Self {
             name: name.to_string(),
             fwd: seq.clone(),
             revcomp: reverse_complement(seq),
+            circular,
         }
     }
 
@@ -60,8 +63,35 @@ fn header_to_name(header: &[u8]) -> Result<String> {
         .context("empty read name")
 }
 
-pub fn from_fasta(file: &PathBuf) -> Result<Vec<TargetSeq>> {
+pub fn from_fasta(file: &PathBuf, circular: bool) -> Result<Vec<TargetSeq>> {
     let fg_io: Io = Io::new(5, BUFFER_SIZE);
+
+    // Check if the .dict file exist, and if so, check if which contigs haec a circular topology.
+    let dict = file.as_path().with_extension(".dict");
+    let circular_contigs = if dict.exists() {
+        let mut circular_contigs = HashMap::new();
+        for line in fg_io.read_lines(&dict)? {
+            if !line.starts_with("@SQ") {
+                continue;
+            }
+            let fields = line.split_ascii_whitespace().collect_vec();
+            let contig_is_circular = fields
+                .iter()
+                .filter(|field| field.starts_with("TP"))
+                .filter_map(|field| field.split_terminator(':').last())
+                .any(|field| field == "circular");
+            let contig_name = fields
+                .iter()
+                .filter(|field| field.starts_with("SN"))
+                .find_map(|field| field.split_terminator(':').last())
+                .unwrap();
+            circular_contigs.insert(contig_name.to_owned(), contig_is_circular);
+        }
+        circular_contigs
+    } else {
+        HashMap::new()
+    };
+
     let source: FastaReader<Box<dyn BufRead + Send>> =
         FastaReader::with_capacity(fg_io.new_reader(file)?, BUFFER_SIZE);
 
@@ -82,7 +112,10 @@ pub fn from_fasta(file: &PathBuf) -> Result<Vec<TargetSeq>> {
                 .map(u8::to_ascii_uppercase)
                 .collect_vec();
             let name = header_to_name(record.head())?;
-            Ok(TargetSeq::new(&name, &sequence))
+            let contig_is_circular = circular_contigs
+                .get(&name)
+                .map_or(circular, |circular| *circular);
+            Ok(TargetSeq::new(&name, &sequence, contig_is_circular))
         })
         .collect()
 }
