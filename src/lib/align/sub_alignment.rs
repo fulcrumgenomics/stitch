@@ -79,7 +79,6 @@ impl SubAlignmentBuilder {
                 self.elements.push(Op::new(Kind::Insertion, op_len));
                 None
             }
-            // FIXME: contig
             AlignmentOperation::Xjump(new_contig_idx, new_query_start) => {
                 let alignment = SubAlignment {
                     contig_idx: self.contig_idx,
@@ -101,11 +100,27 @@ impl SubAlignmentBuilder {
 
                 Some(alignment)
             }
-            AlignmentOperation::Yclip(_) => {
-                assert!(op_len == 1);
-                None
+            AlignmentOperation::Yjump(y_jump_len) => {
+                let alignment = SubAlignment {
+                    contig_idx: self.contig_idx,
+                    query_start: self.query_start,
+                    query_end: self.query_offset,
+                    target_start: self.target_start,
+                    target_end: self.target_offset,
+                    cigar: Cigar::try_from(self.elements.clone()).unwrap(),
+                    score: self.score,
+                };
+
+                // reset
+                self.elements.clear();
+                self.target_offset += y_jump_len;
+                self.target_start = self.target_offset;
+                self.query_start = self.query_offset;
+                self.score = 0;
+
+                Some(alignment)
             }
-            AlignmentOperation::Xclip(_) => {
+            AlignmentOperation::Yclip(_) | AlignmentOperation::Xclip(_) => {
                 assert!(op_len == 1);
                 None
             }
@@ -159,7 +174,7 @@ impl SubAlignmentBuilder {
         self.query_offset = self.query_start;
         self.target_offset = self.target_start;
         self.score = 0;
-        self.contig_idx = alignment.contig_idx;
+        self.contig_idx = alignment.start_contig_idx;
 
         let mut alignments = Vec::new();
         let mut last = alignment.operations[0];
@@ -170,7 +185,10 @@ impl SubAlignmentBuilder {
                 op_len += 1;
             } else {
                 if let Some(alignment) = self.add_op(last, op_len, scoring) {
-                    alignments.push(alignment);
+                    // ignore alignments that do not consume target bases
+                    if alignment.target_start < alignment.target_end {
+                        alignments.push(alignment);
+                    }
                 }
                 op_len = 1;
             }

@@ -793,10 +793,8 @@ impl<F: MatchFunc> SingleContigAligner<F> {
 
         // Filter out Yclip from alignment.operations
         {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xjump};
-            alignment.operations.retain(|x| {
-                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xjump(_, _))
-            });
+            use self::AlignmentOperation::Yclip;
+            alignment.operations.retain(|x| !matches!(*x, Yclip(_)));
         }
 
         // Set the clip penalties to the original values
@@ -829,12 +827,10 @@ impl<F: MatchFunc> SingleContigAligner<F> {
         let mut alignment = self.custom(x, y);
         alignment.mode = AlignmentMode::TargetLocal;
 
-        // Filter out Yclip from alignment.operations
+        // Filter out Xclip from alignment.operations
         {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xjump};
-            alignment.operations.retain(|x| {
-                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xjump(_, _))
-            });
+            use self::AlignmentOperation::Xclip;
+            alignment.operations.retain(|x| !matches!(*x, Xclip(_)));
         }
 
         // Set the clip penalties to the original values
@@ -869,10 +865,13 @@ impl<F: MatchFunc> SingleContigAligner<F> {
 
         // Filter out Xclip and Yclip from alignment.operations
         {
-            use self::AlignmentOperation::{Del, Ins, Match, Subst, Xjump};
-            alignment.operations.retain(|x| {
-                *x == Match || *x == Subst || *x == Ins || *x == Del || matches!(*x, Xjump(_, _))
-            });
+            // Filter out Xclip from alignment.operations
+            {
+                use self::AlignmentOperation::{Xclip, Yclip};
+                alignment
+                    .operations
+                    .retain(|x| !matches!(*x, Xclip(_) | Yclip(_)));
+            }
         }
 
         // Set the clip penalties to the original values
@@ -920,7 +919,7 @@ pub mod tests {
         assert_eq!(alignment.ystart, ystart, "ystart {alignment}");
         assert_eq!(alignment.yend, yend, "yend {alignment}");
         assert_eq!(alignment.score, score, "score {alignment}");
-        assert_eq!(alignment.contig_idx, 0, "strand {alignment}");
+        assert_eq!(alignment.start_contig_idx, 0, "strand {alignment}");
         assert_eq!(alignment.cigar(), cigar, "cigar {alignment}");
         assert_eq!(alignment.length, length, "length {alignment}");
     }

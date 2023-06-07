@@ -68,6 +68,10 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
         }
     }
 
+    pub fn is_circular(&self, contig_idx: usize) -> bool {
+        self.contigs[contig_idx].aligner.circular
+    }
+
     fn hashmap_for_strand_mut(&mut self, is_forward: bool) -> &mut HashMap<String, usize> {
         if is_forward {
             &mut self.name_to_forward
@@ -287,7 +291,7 @@ pub mod tests {
         ystart: usize,
         yend: usize,
         score: i32,
-        contig_idx: usize,
+        start_contig_idx: usize,
         cigar: &str,
         length: usize,
     ) {
@@ -296,7 +300,10 @@ pub mod tests {
         assert_eq!(alignment.ystart, ystart, "ystart {alignment}");
         assert_eq!(alignment.yend, yend, "yend {alignment}");
         assert_eq!(alignment.score, score, "score {alignment}");
-        assert_eq!(alignment.contig_idx, contig_idx, "contig_idx {alignment}");
+        assert_eq!(
+            alignment.start_contig_idx, start_contig_idx,
+            "contig_idx {alignment}"
+        );
         assert_eq!(alignment.cigar(), cigar, "cigar {alignment}");
         assert_eq!(alignment.length, length, "length {alignment}");
     }

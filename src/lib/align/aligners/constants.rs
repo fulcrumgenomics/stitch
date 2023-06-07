@@ -18,13 +18,14 @@ pub const DEFAULT_ALIGNER_CAPACITY: usize = 200;
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Eq, PartialEq, Debug, Copy, Clone, Hash)]
 pub enum AlignmentOperation {
-    Match,               // Consumes one query and one target base
-    Subst,               // Consumes one query and one target base
-    Del,                 // Consumes a single target base
-    Ins,                 // Consumes a single query base
-    Xclip(usize),        // Consumes N query bases at the start or end of the query
-    Yclip(usize),        // Consumes N query bases at the start or end of the target
-    Xjump(usize, usize), // Consumes N query bases (contig_idx, from_idx)
+    Match,               // Consumes one x and one y base
+    Subst,               // Consumes one x and one y base
+    Del,                 // Consumes a single x base
+    Ins,                 // Consumes a single y base
+    Xclip(usize),        // Consumes N x bases at the start or end of the x
+    Yclip(usize),        // Consumes N x bases at the start or end of the y
+    Xjump(usize, usize), // Consumes N x bases (contig_idx, from_idx)
+    Yjump(usize),        // Consumes N y bases (from_idx)
 }
 
 impl AlignmentOperation {
@@ -53,29 +54,31 @@ impl AlignmentOperation {
                     format!("{contig_jump_str}{}j", x_index - new_x_index)
                 }
             }
+            AlignmentOperation::Yjump(y_jump_len) => format!("{}S", y_jump_len),
         }
     }
 
-    pub fn length_on_x(&self, x_index: i32) -> i32 {
+    pub fn length_on_x(&self, x_index: usize) -> i32 {
         use crate::align::aligners::constants::AlignmentOperation::{
-            Del, Ins, Match, Subst, Xclip, Xjump, Yclip,
+            Del, Ins, Match, Subst, Xclip, Xjump, Yclip, Yjump,
         };
         match *self {
             Match | Subst | Ins => 1,
-            Del | Yclip(_) => 0,
+            Del | Yclip(_) | Yjump(_) => 0,
             Xclip(len) => len as i32,
-            Xjump(_, to_x_index) => to_x_index as i32 - x_index,
+            Xjump(_, to_x_index) => to_x_index as i32 - x_index as i32,
         }
     }
 
     #[allow(dead_code)]
-    pub fn length_on_y(&self) -> i32 {
+    pub fn length_on_y(&self) -> usize {
         use crate::align::aligners::constants::AlignmentOperation::{
-            Del, Ins, Match, Subst, Xclip, Xjump, Yclip,
+            Del, Ins, Match, Subst, Xclip, Xjump, Yclip, Yjump,
         };
         match *self {
             Match | Subst | Del => 1,
-            Yclip(len) => len as i32,
+            Yclip(len) => len,
+            Yjump(len) => len,
             Ins | Xclip(_) | Xjump(_, _) => 0,
         }
     }

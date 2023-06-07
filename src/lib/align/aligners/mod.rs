@@ -111,7 +111,7 @@ pub struct Aligners<'a, F: MatchFunc> {
     banded: BandedAligner<MatchParams>,
     // Aligner used when there are more than one contig (or double strand, or both)
     multi_contig: MultiContigAligner<'a, F>,
-    // The ailgnment mode
+    // The alignment mode
     mode: AlignmentMode,
 }
 
@@ -184,53 +184,174 @@ impl Aligners<'_, MatchParams> {
     pub fn align(
         &mut self,
         record: &FastqOwnedRecord,
-        target_seq: &[TargetSeq],
+        target_seqs: &[TargetSeq],
         target_hashes: &[TargetHash],
         pre_align: bool,
         pre_align_min_score: i32,
+        circular_slop: usize,
     ) -> (Option<Alignment>, Option<i32>) {
         let query = record.seq();
-        // Align the record to all the targets in a local banded alignment. If there is at least one
-        // alignment with minimum score, then align uses the full aligner.
-        // TODO: we could align to the subset of targets that had a "good enough" local banded
-        // alignment.  Hmmn.
-        let mut alignment: Option<Alignment> = None;
         let mut prealign_score: Option<i32> = None;
-        for (index, target_seq) in target_seq.iter().enumerate() {
-            let target_hash = &target_hashes[index];
-            let (banded_fwd, banded_revcomp, cur_prealign_score) = maybe_prealign(
-                query,
-                target_seq,
-                target_hash,
-                &mut self.banded,
-                pre_align,
-                Some(pre_align_min_score),
-            );
-            if banded_fwd.map_or(true, |score| score >= pre_align_min_score)
-                || banded_revcomp.map_or(true, |score| score >= pre_align_min_score)
-            {
-                let mut aln = self.multi_contig.custom(query);
-                match self.mode {
-                    AlignmentMode::Local
-                    | AlignmentMode::QueryLocal
-                    | AlignmentMode::TargetLocal => {
-                        aln.operations.retain(|x| {
-                            *x == Match
-                                || *x == Subst
-                                || *x == Ins
-                                || *x == Del
-                                || matches!(*x, Xjump(_, _))
-                        });
-                    }
-                    AlignmentMode::Global => (), // do nothing
-                    AlignmentMode::Custom => unreachable!(),
+        if pre_align {
+            // Align the record to all the targets in a local banded alignment. If there is at least one
+            // alignment with minimum score, then align uses the full aligner.
+            for (index, target_seq) in target_seqs.iter().enumerate() {
+                let target_hash = &target_hashes[index];
+                prealign_score = prealign_local_banded(
+                    query,
+                    target_seq,
+                    target_hash,
+                    &mut self.banded,
+                    pre_align_min_score,
+                );
+                if prealign_score.is_some() {
+                    break;
                 }
-                alignment = Some(aln);
-                prealign_score = cur_prealign_score;
-                break;
             }
         }
-        (alignment, prealign_score)
+        if pre_align && prealign_score.is_none() {
+            (None, None)
+        } else {
+            let original_alignment = self.multi_contig_align(query);
+            let alignment = self
+                .realign_origin(query, &original_alignment, circular_slop)
+                .or(Some(original_alignment));
+            (alignment, prealign_score)
+        }
+    }
+
+    fn multi_contig_align(&mut self, query: &[u8]) -> Alignment {
+        let mut aln = self.multi_contig.custom(query);
+        match self.mode {
+            AlignmentMode::Local | AlignmentMode::QueryLocal | AlignmentMode::TargetLocal => {
+                aln.operations.retain(|x| {
+                    *x == Match
+                        || *x == Subst
+                        || *x == Ins
+                        || *x == Del
+                        || matches!(*x, Xjump(_, _))
+                });
+            }
+            AlignmentMode::Global => (), // do nothing
+            AlignmentMode::Custom => unreachable!(),
+        }
+        aln
+    }
+
+    /// Realign alignments where `y` may align across the origin.
+    ///
+    /// If the alignment is within `slop` from the begging of the alignment start contig, split
+    /// the `y` into two, and append the prefix to the suffix, then realign the new `y`.  If the
+    /// prefix aligns to the end of the contig, then we should have have an alignment of the "new"
+    /// `y` where there's a Xjump.
+    ///
+    /// The same is true for if the original alignment is within `slop` from the end of the
+    /// alignment start contig...
+    fn realign_origin(
+        &mut self,
+        query: &[u8],
+        alignment: &Alignment,
+        slop: usize,
+    ) -> Option<Alignment> {
+        // self.multi_contig
+        //     .contigs
+        //     .iter()
+        //     .find(|contig| contig.aligner.contig_idx);
+
+        //alignment.start_contig_idx
+
+        // Get the contig at the start of the read
+        let contig_at_start: Option<usize> = if alignment.xstart <= slop
+            && self.multi_contig.is_circular(alignment.start_contig_idx)
+        {
+            Some(alignment.start_contig_idx)
+        } else {
+            None
+        };
+
+        // Get the contig at the end of the read
+        let contig_at_end: Option<usize> = if alignment.xlen <= alignment.xend + slop
+            && self.multi_contig.is_circular(alignment.end_contig_idx)
+        {
+            Some(alignment.end_contig_idx)
+        } else {
+            None
+        };
+
+        // If the alignment starts and ends on the same contig, do not re-align.  If it doesn't
+        // start or end close to the start or end of the contig respecitvely, also don't re-align.
+        match (contig_at_start, contig_at_end) {
+            (Some(start), Some(end)) => {
+                if start == end {
+                    return None;
+                }
+            }
+            (None, None) => return None,
+            _ => (),
+        }
+
+        // Ensure that there are additional `y` bases to align!
+        let contig_at_start = if contig_at_start.is_none() || alignment.yend == alignment.ylen {
+            None
+        } else {
+            contig_at_start
+        };
+        let contig_at_end = if contig_at_end.is_none() || 0 == alignment.ystart {
+            None
+        } else {
+            contig_at_start
+        };
+
+        let start_alignment: Option<Alignment> = if let Some(start_contig_idx) = contig_at_start {
+            // The current alignment aligns to the start of the contig, so take all bases up to
+            // the end of the current alignment and append it to the unaligned suffix.
+            let new_query: Vec<u8> = [&query[alignment.yend..], &query[..alignment.yend]].concat();
+            let new_alignment = self.multi_contig_align(&new_query);
+            // TODO: ensure that the new alignment crosses the origin
+            if new_alignment.score > alignment.score
+                && new_alignment.start_contig_idx == start_contig_idx
+                && alignment.end_contig_idx == start_contig_idx
+            {
+                Some(new_alignment.split_at_y(alignment.ylen - alignment.yend))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let end_alignment: Option<Alignment> = if let Some(end_contig_idx) = contig_at_end {
+            // The current alignment aligns to the end of the contig, so take all bases up to
+            // the start of the current alignment and append it to the unaligned prefix.
+            let new_query: Vec<u8> =
+                [&query[alignment.ystart..], &query[..alignment.ystart]].concat();
+            let new_alignment = self.multi_contig_align(&new_query);
+            // TODO: ensure that the new alignment crosses the origin
+            if new_alignment.score > alignment.score
+                && new_alignment.end_contig_idx == end_contig_idx
+                && alignment.start_contig_idx == end_contig_idx
+            {
+                Some(new_alignment.split_at_y(alignment.ylen - alignment.ystart))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Pick between the alignments
+        match (start_alignment, end_alignment) {
+            (Some(start), Some(end)) => {
+                if start.score >= end.score {
+                    Some(start)
+                } else {
+                    Some(end)
+                }
+            }
+            (Some(start), _) => Some(start),
+            (_, Some(end)) => Some(end),
+            _ => None,
+        }
     }
 }
 
@@ -246,41 +367,33 @@ fn align_local_banded<F: MatchFunc>(
         .score
 }
 
-fn maybe_prealign<F: MatchFunc>(
+fn prealign_local_banded<F: MatchFunc>(
     query: &[u8],
     target_seq: &TargetSeq,
     target_hash: &TargetHash,
     banded_aligner: &mut BandedAligner<F>,
-    pre_align: bool,
-    pre_align_min_score: Option<i32>,
-) -> (Option<i32>, Option<i32>, Option<i32>) {
-    let min_score = pre_align_min_score.unwrap_or(MIN_SCORE);
-    let (banded_fwd, banded_revcomp, prealign_score) = {
-        if pre_align {
-            let banded_fwd = align_local_banded(
-                query,
-                &target_seq.fwd,
-                banded_aligner,
-                &target_hash.fwd_hash,
-            );
-            if banded_fwd >= min_score {
-                (Some(banded_fwd), None, Some(banded_fwd))
-            } else {
-                let banded_revcomp = align_local_banded(
-                    query,
-                    &target_seq.revcomp,
-                    banded_aligner,
-                    &target_hash.revcomp_hash,
-                );
-                let prealign_score = std::cmp::max(banded_fwd, banded_revcomp);
-                (Some(banded_fwd), Some(banded_revcomp), Some(prealign_score))
-            }
-        } else {
-            (None, None, None)
-        }
-    };
-
-    (banded_fwd, banded_revcomp, prealign_score)
+    pre_align_min_score: i32,
+) -> Option<i32> {
+    // Try to the forward strand
+    let banded_fwd = align_local_banded(
+        query,
+        &target_seq.fwd,
+        banded_aligner,
+        &target_hash.fwd_hash,
+    );
+    if banded_fwd >= pre_align_min_score {
+        return Some(banded_fwd);
+    }
+    let banded_revcomp = align_local_banded(
+        query,
+        &target_seq.revcomp,
+        banded_aligner,
+        &target_hash.revcomp_hash,
+    );
+    if banded_revcomp >= pre_align_min_score {
+        return Some(banded_revcomp);
+    }
+    None
 }
 
 fn header_to_name(header: &[u8]) -> Result<String> {

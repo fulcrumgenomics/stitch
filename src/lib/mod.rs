@@ -7,7 +7,10 @@
     clippy::similar_names,
     clippy::too_many_lines,
     clippy::too_many_arguments,
-    clippy::struct_excessive_bools
+    clippy::struct_excessive_bools,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 
 mod align;
