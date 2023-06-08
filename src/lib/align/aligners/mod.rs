@@ -254,17 +254,31 @@ impl Aligners<'_, MatchParams> {
             .unwrap_or(original_alignment);
 
         // for circular contigs, we need to re-align around the origin
-        for contig_idx in 0..self.multi_contig.len() {
-            let mut single_contig_aln = self.multi_contig.custom_single_contig(query, contig_idx);
-            single_contig_aln = self
-                .realign_origin(query, &single_contig_aln, opts.circular_slop, true)
-                .unwrap_or(single_contig_aln);
-
-            if single_contig_aln.score > original_alignment.score
-                || (single_contig_aln.score == original_alignment.score
-                    && single_contig_aln.length > original_alignment.length)
-            {
-                original_alignment = single_contig_aln;
+        // works with modes: "local" and "target-local" only.
+        if matches!(opts.mode, AlignmentMode::Local | AlignmentMode::TargetLocal) {
+            let indexes_for_single_contig_aln = match contigs_to_align {
+                Some(indexes) => {
+                    let mut indexes = indexes.iter().copied().collect_vec();
+                    indexes.sort_unstable();
+                    indexes
+                }
+                None => (0..self.multi_contig.len()).collect_vec(),
+            };
+            for contig_idx in indexes_for_single_contig_aln {
+                // align!
+                let mut single_contig_aln =
+                    self.multi_contig.custom_single_contig(query, contig_idx);
+                // re-align around the origin
+                single_contig_aln = self
+                    .realign_origin(query, &single_contig_aln, opts.circular_slop, true)
+                    .unwrap_or(single_contig_aln);
+                // update the alignment if the single-contig alignment has better score
+                if single_contig_aln.score > original_alignment.score
+                    || (single_contig_aln.score == original_alignment.score
+                        && single_contig_aln.length > original_alignment.length)
+                {
+                    original_alignment = single_contig_aln;
+                }
             }
         }
 
@@ -481,25 +495,23 @@ fn header_to_name(header: &[u8]) -> Result<String> {
 pub fn to_records<F: MatchFunc>(
     fastq: &FastqOwnedRecord,
     result: Option<Alignment>,
-    hard_clip: bool,
-    use_eq_and_x: bool,
     alt_score: Option<i32>,
     scoring: &Scoring<F>,
-    pick_primary: PrimaryPickingStrategy,
     target_seqs: &[TargetSeq],
+    opts: &Align,
 ) -> Result<Vec<SamRecord>> {
     let name = header_to_name(fastq.head())?;
     let read_name: SamReadName = name.parse()?;
     let bases = fastq.seq();
     let quals = fastq.qual();
 
-    let mut builder = SubAlignmentBuilder::new(use_eq_and_x);
-
     if let Some(alignment) = result {
-        let subs = builder.build(&alignment, true, scoring);
+        let hard_clip = !opts.soft_clip;
+        let mut builder: SubAlignmentBuilder = SubAlignmentBuilder::new(opts.use_eq_and_x);
+        let mut subs = builder.build(&alignment, true, scoring);
         ensure!(!subs.is_empty());
 
-        let primary_index = match pick_primary {
+        let primary_index = match opts.pick_primary {
             PrimaryPickingStrategy::QueryLength => subs
                 .iter()
                 .enumerate()
@@ -515,6 +527,20 @@ pub fn to_records<F: MatchFunc>(
                 })
                 .map_or(0, |(index, _)| index),
         };
+
+        // Filter out sub-alignments that have score worse than X% of the primary
+        // if opts.
+        if opts.filter_secondary {
+            let min_score = subs[primary_index].score as f32 * opts.filter_secondary_pct / 100.0;
+            let mut new_subs = Vec::new();
+            while !subs.is_empty() {
+                let sub = subs.remove(0);
+                if sub.score as f32 >= min_score {
+                    new_subs.push(sub);
+                }
+            }
+            subs = new_subs;
+        }
 
         let records = subs
             .iter()
