@@ -223,15 +223,23 @@ pub struct Align {
     pub circular_slop: usize,
 
     /// Filter out secondary alignments with score X% worse than the primary alignment.
-    #[clap(long, default_value = "false", display_order = 20)]
+    #[clap(long, default_value = "false", display_order = 21)]
     pub filter_secondary: bool,
 
     /// Filter out secondary alignments with score X% worse than the primary alignment.
-    #[clap(long, default_value = "10", display_order = 21)]
+    #[clap(long, default_value = "10", display_order = 22)]
     pub filter_secondary_pct: f32,
 
+    /// Generate sub-optimal alignments.
+    #[clap(long, default_value = "false", display_order = 23)]
+    pub suboptimal: bool,
+
+    /// Generate sub-optimal alignments with score X% worse than the optimal alignment.
+    #[clap(long, default_value = "20", display_order = 24)]
+    pub suboptimal_pct: f32,
+
     /// The compression level of the output BAM
-    #[clap(long, short = 'c', default_value = "0", display_order = 22)]
+    #[clap(long, short = 'c', default_value = "0", display_order = 25)]
     pub compression: u8,
 }
 
@@ -286,21 +294,13 @@ impl Align {
                             let mut results: Vec<OutputResult> = Vec::new();
                             for group in iter {
                                 let first: &FastqOwnedRecord = group.first().unwrap();
-                                let (maybe_alignment, maybe_score) =
+                                let (alignments, maybe_score) =
                                     aligners.align(first, &target_seqs, &target_hashes, &opts);
-                                match maybe_alignment {
-                                    Some(alignment) => {
-                                        for record in group {
-                                            let alignment = alignment.clone();
-                                            results.push((record, Some(alignment), maybe_score));
-                                        }
-                                    }
-                                    None => {
-                                        for record in group {
-                                            results.push((record, None, maybe_score));
-                                        }
-                                    }
-                                };
+
+                                for record in group {
+                                    let alignments = alignments.clone();
+                                    results.push((record, alignments, maybe_score));
+                                }
                             }
 
                             msg.oneshot
@@ -360,10 +360,10 @@ impl Align {
             // Get a receiver for the alignment of a record
             if let Ok(receiver) = reader.to_output_rx.try_recv() {
                 let msg = receiver.recv()?;
-                for (fastq, result, alt_score) in msg.results {
+                for (fastq, alignments, alt_score) in msg.results {
                     progress_logger.record();
                     let records =
-                        to_records(&fastq, result, alt_score, &scoring, &target_seqs, self)?;
+                        to_records(&fastq, &alignments, alt_score, &scoring, &target_seqs, self)?;
                     for record in &records {
                         writer.write_record(&header, record)?;
                     }

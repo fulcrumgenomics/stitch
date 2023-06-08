@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::align::aligners::constants::MIN_SCORE;
 
@@ -128,19 +128,6 @@ impl Traceback {
 }
 
 pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -> Alignment {
-    let mut j = n;
-    let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(n);
-    let mut xstart: usize = 0usize;
-    let mut ystart: usize = 0usize;
-    let mut yend = n;
-
-    assert!(!aligners.is_empty());
-
-    let mut contig_idx_to_aligner = HashMap::with_capacity(aligners.len());
-    for aligner in aligners {
-        contig_idx_to_aligner.insert(aligner.contig_idx, aligner);
-    }
-
     let mut aligner_offset = 0;
     let mut score = MIN_SCORE;
     let mut alignment_length = 0;
@@ -160,7 +147,78 @@ pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -
             alignment_length = cur_len;
         }
     }
-    let mut cur_aligner = &aligners[aligner_offset];
+    traceback_from(aligners, n, aligners[aligner_offset].contig_idx)
+}
+
+pub fn traceback_all<F: MatchFunc>(
+    aligners: &[&SingleContigAligner<F>],
+    n: usize,
+) -> Vec<Alignment> {
+    let mut alignments = Vec::new();
+    let mut contig_indexes_seen: HashSet<usize> = HashSet::new();
+    while contig_indexes_seen.len() < aligners.len() {
+        // Get the highest scoring alignment that _ends_ in a contig we haven't seen
+        let mut aligner_offset = 0;
+        let mut score = MIN_SCORE;
+        let mut alignment_length = 0;
+        for (cur_aligner_offset, cur_aligner) in aligners.iter().enumerate() {
+            if contig_indexes_seen.contains(&(cur_aligner.contig_idx as usize)) {
+                continue;
+            }
+            let m: usize = cur_aligner.traceback.rows - 1;
+            let cur_score = cur_aligner.S[n % 2][m];
+            let cur_len = cur_aligner.traceback.get(m, n).get_s_len();
+            // NB: If the scores equal, pick the one with the longer alignment length
+            let update = match cur_score.cmp(&score) {
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => cur_len > alignment_length,
+            };
+            if update {
+                aligner_offset = cur_aligner_offset;
+                score = cur_score;
+                alignment_length = cur_len;
+            }
+        }
+        // Add the contigs from this alignment to the ones already seen
+        let alignment = traceback_from(aligners, n, aligners[aligner_offset].contig_idx);
+        contig_indexes_seen.insert(alignment.start_contig_idx);
+        contig_indexes_seen.insert(alignment.end_contig_idx);
+        for op in &alignment.operations {
+            if let AlignmentOperation::Xjump(idx, _) = op {
+                contig_indexes_seen.insert(*idx);
+            }
+        }
+        alignments.push(alignment);
+    }
+
+    alignments
+}
+
+pub fn traceback_from<F: MatchFunc>(
+    aligners: &[&SingleContigAligner<F>],
+    n: usize,
+    contig_index: u32,
+) -> Alignment {
+    let mut j = n;
+    let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(n);
+    let mut xstart: usize = 0usize;
+    let mut ystart: usize = 0usize;
+    let mut yend = n;
+
+    assert!(!aligners.is_empty());
+
+    let mut contig_idx_to_aligner = HashMap::with_capacity(aligners.len());
+    for aligner in aligners {
+        contig_idx_to_aligner.insert(aligner.contig_idx, aligner);
+    }
+
+    let mut cur_aligner = contig_idx_to_aligner.get(&contig_index).unwrap();
+    let score = cur_aligner.S[n % 2][cur_aligner.traceback.rows - 1];
+    let alignment_length = cur_aligner
+        .traceback
+        .get(cur_aligner.traceback.rows - 1, n)
+        .get_s_len();
 
     let contig_idx = cur_aligner.contig_idx;
     let xlen = cur_aligner.traceback.rows - 1;
