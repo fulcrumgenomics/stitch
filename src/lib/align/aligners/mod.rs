@@ -5,6 +5,8 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{ensure, Context, Result};
 use bio::alignment::pairwise::MatchFunc;
 
@@ -186,51 +188,102 @@ impl Aligners<'_, MatchParams> {
         record: &FastqOwnedRecord,
         target_seqs: &[TargetSeq],
         target_hashes: &[TargetHash],
-        pre_align: bool,
-        pre_align_min_score: i32,
-        circular_slop: usize,
+        opts: &Align,
     ) -> (Option<Alignment>, Option<i32>) {
         let query = record.seq();
-        let mut prealign_score: Option<i32> = None;
-        if pre_align {
+        let mut contig_idx_to_prealign_score: HashMap<usize, i32> = HashMap::new();
+        if opts.pre_align {
             // Align the record to all the targets in a local banded alignment. If there is at least one
             // alignment with minimum score, then align uses the full aligner.
             for (index, target_seq) in target_seqs.iter().enumerate() {
                 let target_hash = &target_hashes[index];
-                prealign_score = prealign_local_banded(
+                let (score_fwd, score_revcomp) = prealign_local_banded(
                     query,
                     target_seq,
                     target_hash,
                     &mut self.banded,
-                    pre_align_min_score,
+                    opts.double_strand,
+                    opts.pre_align_min_score,
                 );
-                if prealign_score.is_some() {
+                if let Some(score) = score_fwd {
+                    contig_idx_to_prealign_score.insert(
+                        self.multi_contig
+                            .contig_index_for_strand(true, &target_seq.name)
+                            .unwrap(),
+                        score,
+                    );
+                }
+                if let Some(score) = score_revcomp {
+                    contig_idx_to_prealign_score.insert(
+                        self.multi_contig
+                            .contig_index_for_strand(false, &target_seq.name)
+                            .unwrap(),
+                        score,
+                    );
+                }
+                // If we are going to align to all the contigs anyhow, then we can stop here.
+                if !opts.pre_align_subset_contigs && !contig_idx_to_prealign_score.is_empty() {
                     break;
                 }
             }
+            // If there was no contig with a good enough alignment, return None now.
+            if contig_idx_to_prealign_score.is_empty() {
+                return (None, None);
+            }
         }
-        if pre_align && prealign_score.is_none() {
-            (None, None)
-        } else {
-            let original_alignment = self.multi_contig_align(query);
-            let alignment = self
-                .realign_origin(query, &original_alignment, circular_slop)
-                .or(Some(original_alignment));
-            (alignment, prealign_score)
+
+        // Get the contigs to align based on if we pre-aligned or not
+        let contigs_to_align: Option<HashSet<usize>> =
+            if opts.pre_align && opts.pre_align_subset_contigs {
+                let indexes = contig_idx_to_prealign_score
+                    .keys()
+                    .copied()
+                    .collect::<HashSet<usize>>();
+                assert!(!indexes.is_empty(), "Bug: should have returned above");
+                Some(indexes)
+            } else {
+                // Use all the contigs!
+                None
+            };
+
+        // Align to all the contigs! (or those that had a "good enough" pre-align score)
+        let mut original_alignment = self.multi_contig_align(query, contigs_to_align.as_ref());
+        // Re-align around the origin if the contig is circular or we force circular
+        original_alignment = self
+            .realign_origin(query, &original_alignment, opts.circular_slop, false)
+            .unwrap_or(original_alignment);
+
+        // for circular contigs, we need to re-align around the origin
+        for contig_idx in 0..self.multi_contig.len() {
+            let mut single_contig_aln = self.multi_contig.custom_single_contig(query, contig_idx);
+            single_contig_aln = self
+                .realign_origin(query, &single_contig_aln, opts.circular_slop, true)
+                .unwrap_or(single_contig_aln);
+
+            if single_contig_aln.score > original_alignment.score
+                || (single_contig_aln.score == original_alignment.score
+                    && single_contig_aln.length > original_alignment.length)
+            {
+                original_alignment = single_contig_aln;
+            }
         }
+
+        // Get the maximum pre-align score to return
+        let prealign_score: Option<i32> = contig_idx_to_prealign_score.values().copied().max();
+        (Some(original_alignment), prealign_score)
     }
 
-    fn multi_contig_align(&mut self, query: &[u8]) -> Alignment {
-        let mut aln = self.multi_contig.custom(query);
+    fn multi_contig_align(
+        &mut self,
+        query: &[u8],
+        contig_indexes: Option<&HashSet<usize>>,
+    ) -> Alignment {
+        // Check if we should subset the contig indexes
+        let mut aln = self.multi_contig.custom_with_subset(query, contig_indexes);
         match self.mode {
             AlignmentMode::Local | AlignmentMode::QueryLocal | AlignmentMode::TargetLocal => {
-                aln.operations.retain(|x| {
-                    *x == Match
-                        || *x == Subst
-                        || *x == Ins
-                        || *x == Del
-                        || matches!(*x, Xjump(_, _))
-                });
+                aln.operations
+                    .retain(|x| matches!(*x, Match | Subst | Ins | Del | Xjump(_, _)));
             }
             AlignmentMode::Global => (), // do nothing
             AlignmentMode::Custom => unreachable!(),
@@ -252,13 +305,9 @@ impl Aligners<'_, MatchParams> {
         query: &[u8],
         alignment: &Alignment,
         slop: usize,
+        all_contigs: bool,
     ) -> Option<Alignment> {
-        // self.multi_contig
-        //     .contigs
-        //     .iter()
-        //     .find(|contig| contig.aligner.contig_idx);
-
-        //alignment.start_contig_idx
+        // TODO: only align to the sub-set of contigs that the original alignment contained...
 
         // Get the contig at the start of the read
         let contig_at_start: Option<usize> = if alignment.xstart <= slop
@@ -302,11 +351,26 @@ impl Aligners<'_, MatchParams> {
             contig_at_start
         };
 
+        let contig_indexes: Option<HashSet<usize>> = if all_contigs {
+            Some((0..self.multi_contig.len()).collect::<HashSet<_>>())
+        } else {
+            // Use the contigs in the existing alignment
+            let mut indexes = HashSet::new();
+            indexes.insert(alignment.start_contig_idx);
+            indexes.insert(alignment.end_contig_idx);
+            for op in &alignment.operations {
+                if let Xjump(idx, _) = op {
+                    indexes.insert(*idx);
+                }
+            }
+            Some(indexes)
+        };
+
         let start_alignment: Option<Alignment> = if let Some(start_contig_idx) = contig_at_start {
             // The current alignment aligns to the start of the contig, so take all bases up to
             // the end of the current alignment and append it to the unaligned suffix.
             let new_query: Vec<u8> = [&query[alignment.yend..], &query[..alignment.yend]].concat();
-            let new_alignment = self.multi_contig_align(&new_query);
+            let new_alignment = self.multi_contig_align(&new_query, contig_indexes.as_ref());
             // TODO: ensure that the new alignment crosses the origin
             if new_alignment.score > alignment.score
                 && new_alignment.start_contig_idx == start_contig_idx
@@ -325,7 +389,7 @@ impl Aligners<'_, MatchParams> {
             // the start of the current alignment and append it to the unaligned prefix.
             let new_query: Vec<u8> =
                 [&query[alignment.ystart..], &query[..alignment.ystart]].concat();
-            let new_alignment = self.multi_contig_align(&new_query);
+            let new_alignment = self.multi_contig_align(&new_query, contig_indexes.as_ref());
             // TODO: ensure that the new alignment crosses the origin
             if new_alignment.score > alignment.score
                 && new_alignment.end_contig_idx == end_contig_idx
@@ -372,8 +436,9 @@ fn prealign_local_banded<F: MatchFunc>(
     target_seq: &TargetSeq,
     target_hash: &TargetHash,
     banded_aligner: &mut BandedAligner<F>,
+    double_strand: bool,
     pre_align_min_score: i32,
-) -> Option<i32> {
+) -> (Option<i32>, Option<i32>) {
     // Try to the forward strand
     let banded_fwd = align_local_banded(
         query,
@@ -381,19 +446,27 @@ fn prealign_local_banded<F: MatchFunc>(
         banded_aligner,
         &target_hash.fwd_hash,
     );
-    if banded_fwd >= pre_align_min_score {
-        return Some(banded_fwd);
-    }
-    let banded_revcomp = align_local_banded(
-        query,
-        &target_seq.revcomp,
-        banded_aligner,
-        &target_hash.revcomp_hash,
-    );
-    if banded_revcomp >= pre_align_min_score {
-        return Some(banded_revcomp);
-    }
-    None
+    let fwd = if banded_fwd < pre_align_min_score {
+        None
+    } else {
+        Some(banded_fwd)
+    };
+    let revcomp = if double_strand {
+        let banded_revcomp = align_local_banded(
+            query,
+            &target_seq.revcomp,
+            banded_aligner,
+            &target_hash.revcomp_hash,
+        );
+        if banded_revcomp < pre_align_min_score {
+            None
+        } else {
+            Some(banded_revcomp)
+        }
+    } else {
+        None
+    };
+    (fwd, revcomp)
 }
 
 fn header_to_name(header: &[u8]) -> Result<String> {
@@ -541,8 +614,24 @@ pub fn to_records<F: MatchFunc>(
                 // TODO: base this on the alt_score
                 *record.mapping_quality_mut() = MappingQuality::new(60);
 
-                // TODO: tags (e.g. AS, XS, NM, MD)
+                // TODO: tags (e.g. XS, NM, MD)
                 let mut data = Data::default();
+                data.insert(
+                    "qs".parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(sub.query_start as u32),
+                );
+                data.insert(
+                    "qe".parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(sub.query_end as u32),
+                );
+                data.insert(
+                    "ts".parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(sub.target_start as u32),
+                );
+                data.insert(
+                    "te".parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(sub.target_end as u32),
+                );
                 data.insert(
                     "as".parse().unwrap(),
                     noodles::sam::record::data::field::Value::from(alignment.score),
