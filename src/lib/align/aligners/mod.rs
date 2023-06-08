@@ -253,9 +253,18 @@ impl Aligners<'_, MatchParams> {
             .realign_origin(query, &original_alignment, opts.circular_slop, false)
             .unwrap_or(original_alignment);
 
-        // for circular contigs, we need to re-align around the origin
-        // works with modes: "local" and "target-local" only.
-        if matches!(opts.mode, AlignmentMode::Local | AlignmentMode::TargetLocal) {
+        // For circular contigs, we need to re-align around the origin.
+        // This only works with modes: "local" and "target-local" only.
+        // Only re-align only if the current alignment would be re-aligned.
+        let (contig_at_start, contig_at_end) = self
+            .get_start_and_end_contig_indexes_for_realignmnet(
+                &original_alignment,
+                opts.circular_slop,
+            );
+        if matches!(opts.mode, AlignmentMode::Local | AlignmentMode::TargetLocal)
+            && contig_at_start.is_none()
+            && contig_at_end.is_none()
+        {
             let indexes_for_single_contig_aln = match contigs_to_align {
                 Some(indexes) => {
                     let mut indexes = indexes.iter().copied().collect_vec();
@@ -305,24 +314,11 @@ impl Aligners<'_, MatchParams> {
         aln
     }
 
-    /// Realign alignments where `y` may align across the origin.
-    ///
-    /// If the alignment is within `slop` from the begging of the alignment start contig, split
-    /// the `y` into two, and append the prefix to the suffix, then realign the new `y`.  If the
-    /// prefix aligns to the end of the contig, then we should have have an alignment of the "new"
-    /// `y` where there's a Xjump.
-    ///
-    /// The same is true for if the original alignment is within `slop` from the end of the
-    /// alignment start contig...
-    fn realign_origin(
-        &mut self,
-        query: &[u8],
+    fn get_start_and_end_contig_indexes_for_realignmnet(
+        &self,
         alignment: &Alignment,
         slop: usize,
-        all_contigs: bool,
-    ) -> Option<Alignment> {
-        // TODO: only align to the sub-set of contigs that the original alignment contained...
-
+    ) -> (Option<usize>, Option<usize>) {
         // Get the contig at the start of the read
         let contig_at_start: Option<usize> = if alignment.xstart <= slop
             && self.multi_contig.is_circular(alignment.start_contig_idx)
@@ -342,14 +338,12 @@ impl Aligners<'_, MatchParams> {
         };
 
         // If the alignment starts and ends on the same contig, do not re-align.  If it doesn't
-        // start or end close to the start or end of the contig respecitvely, also don't re-align.
+        // start or end close to the start or end of the contig respectively, also don't re-align.
         match (contig_at_start, contig_at_end) {
-            (Some(start), Some(end)) => {
-                if start == end {
-                    return None;
-                }
+            (Some(start), Some(end)) if start == end => {
+                return (None, None);
             }
-            (None, None) => return None,
+            (None, None) => return (None, None),
             _ => (),
         }
 
@@ -364,6 +358,31 @@ impl Aligners<'_, MatchParams> {
         } else {
             contig_at_start
         };
+
+        (contig_at_start, contig_at_end)
+    }
+
+    /// Realign alignments where `y` may align across the origin.
+    ///
+    /// If the alignment is within `slop` from the begging of the alignment start contig, split
+    /// the `y` into two, and append the prefix to the suffix, then realign the new `y`.  If the
+    /// prefix aligns to the end of the contig, then we should have have an alignment of the "new"
+    /// `y` where there's a Xjump.
+    ///
+    /// The same is true for if the original alignment is within `slop` from the end of the
+    /// alignment start contig...
+    fn realign_origin(
+        &mut self,
+        query: &[u8],
+        alignment: &Alignment,
+        slop: usize,
+        all_contigs: bool,
+    ) -> Option<Alignment> {
+        let (contig_at_start, contig_at_end) =
+            self.get_start_and_end_contig_indexes_for_realignmnet(alignment, slop);
+        if contig_at_start.is_none() && contig_at_end.is_none() {
+            return None;
+        }
 
         let contig_indexes: Option<HashSet<usize>> = if all_contigs {
             Some((0..self.multi_contig.len()).collect::<HashSet<_>>())
