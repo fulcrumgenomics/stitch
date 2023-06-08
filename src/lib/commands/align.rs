@@ -106,7 +106,7 @@ pub struct Align {
     #[clap(long, short = 'w', default_value = "50", display_order = 8)]
     pub w: usize,
 
-    /// Pre-align with banded local alignment.
+    /// The minimum score required for pre-alignment.
     #[clap(
         long,
         short = 's',
@@ -115,6 +115,10 @@ pub struct Align {
         display_order = 9
     )]
     pub pre_align_min_score: i32,
+
+    /// Only align to contigs that had an alignment score greater than the `--pre-align-min-score`
+    #[clap(long, short = 'x', default_value = "true", display_order = 8)]
+    pub pre_align_subset_contigs: bool,
 
     /// Use soft-clipping for all alignments, otherwise secondary alignemnts will use hard-clipping
     #[clap(long, short = 'S', default_value = "false", display_order = 10)]
@@ -274,14 +278,8 @@ impl Align {
                             let mut results: Vec<OutputResult> = Vec::new();
                             for group in iter {
                                 let first: &FastqOwnedRecord = group.first().unwrap();
-                                let (maybe_alignment, maybe_score) = aligners.align(
-                                    first,
-                                    &target_seqs,
-                                    &target_hashes,
-                                    opts.pre_align,
-                                    opts.pre_align_min_score,
-                                    opts.circular_slop,
-                                );
+                                let (maybe_alignment, maybe_score) =
+                                    aligners.align(first, &target_seqs, &target_hashes, &opts);
                                 match maybe_alignment {
                                     Some(alignment) => {
                                         for record in group {

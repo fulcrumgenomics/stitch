@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::align::aligners::constants::MIN_SCORE;
 
 use super::{
@@ -134,11 +136,15 @@ pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -
 
     assert!(!aligners.is_empty());
 
-    let mut aligner_idx = 0;
+    let mut contig_idx_to_aligner = HashMap::with_capacity(aligners.len());
+    for aligner in aligners {
+        contig_idx_to_aligner.insert(aligner.contig_idx, aligner);
+    }
+
+    let mut aligner_offset = 0;
     let mut score = MIN_SCORE;
     let mut alignment_length = 0;
-    for (cur_aligner_idx, cur_aligner) in aligners.iter().enumerate() {
-        assert_eq!(cur_aligner_idx, cur_aligner.contig_idx as usize);
+    for (cur_aligner_offset, cur_aligner) in aligners.iter().enumerate() {
         let m: usize = cur_aligner.traceback.rows - 1;
         let cur_score = cur_aligner.S[n % 2][m];
         let cur_len = cur_aligner.traceback.get(m, n).get_s_len();
@@ -149,20 +155,21 @@ pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -
             std::cmp::Ordering::Equal => cur_len > alignment_length,
         };
         if update {
-            aligner_idx = cur_aligner_idx;
+            aligner_offset = cur_aligner_offset;
             score = cur_score;
             alignment_length = cur_len;
         }
     }
-    let mut cur_aligner = &aligners[aligner_idx];
-    let contig_idx = cur_aligner.contig_idx as usize;
+    let mut cur_aligner = &aligners[aligner_offset];
+
+    let contig_idx = cur_aligner.contig_idx;
     let xlen = cur_aligner.traceback.rows - 1;
     let mut cur_contig_idx = contig_idx;
     let mut i = cur_aligner.traceback.rows - 1;
     let mut xend = cur_aligner.traceback.rows - 1;
     let mut last_layer = cur_aligner.traceback.get(i, j).get_s().tb;
     loop {
-        cur_aligner = &aligners[cur_contig_idx];
+        cur_aligner = contig_idx_to_aligner.get(&cur_contig_idx).unwrap();
         let next_layer: u16;
         match last_layer {
             TB_START => break,
@@ -184,10 +191,10 @@ pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -
                 }
                 let s_value: SValue = cur_aligner.traceback.get(i, j).get_s();
                 let s_from = s_value.from as usize;
-                if s_value.idx != cur_contig_idx as u32 || s_from != i - 1 {
-                    operations.push(AlignmentOperation::Xjump(cur_contig_idx, i - 1));
-                    cur_contig_idx = s_value.idx as usize;
-                    cur_aligner = &aligners[cur_contig_idx];
+                if s_value.idx != cur_contig_idx || s_from != i - 1 {
+                    operations.push(AlignmentOperation::Xjump(cur_contig_idx as usize, i - 1));
+                    cur_contig_idx = s_value.idx;
+                    cur_aligner = contig_idx_to_aligner.get(&cur_contig_idx).unwrap();
                 }
                 i = s_from;
                 j -= 1;
@@ -223,7 +230,7 @@ pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -
                 let s_from = cur_aligner.traceback.get(i, j).get_s().from as usize;
                 j -= cur_aligner.Ly[i];
                 if s_from != i {
-                    operations.push(AlignmentOperation::Xjump(cur_contig_idx, i));
+                    operations.push(AlignmentOperation::Xjump(cur_contig_idx as usize, i));
                     i = s_from;
                 }
                 yend = j;
@@ -231,9 +238,9 @@ pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -
             }
             TB_XJUMP => {
                 let s_value = cur_aligner.traceback.get(i, j).get_s();
-                operations.push(AlignmentOperation::Xjump(cur_contig_idx, i));
-                cur_contig_idx = s_value.idx as usize;
-                cur_aligner = &aligners[cur_contig_idx];
+                operations.push(AlignmentOperation::Xjump(cur_contig_idx as usize, i));
+                cur_contig_idx = s_value.idx;
+                cur_aligner = contig_idx_to_aligner.get(&cur_contig_idx).unwrap();
                 i = s_value.from as usize;
                 next_layer = cur_aligner.traceback.get(i, j).get_s().tb;
             }
@@ -263,8 +270,8 @@ pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -
         xend,
         xlen,
         ylen: n,
-        start_contig_idx: cur_contig_idx,
-        end_contig_idx: contig_idx,
+        start_contig_idx: cur_contig_idx as usize,
+        end_contig_idx: contig_idx as usize,
         operations,
         mode: AlignmentMode::Custom,
         length: alignment_length as usize,
