@@ -355,20 +355,16 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
         n: usize,
         contig_indexes: Option<&HashSet<usize>>,
     ) -> Vec<Alignment> {
-        let aligners: Vec<&SingleContigAligner<_>> = match contig_indexes {
-            Some(indexes) if indexes.len() < self.len() => self
-                .contigs
-                .iter()
-                .filter(|contig| indexes.contains(&(contig.aligner.contig_idx as usize)))
-                .map(|c| &c.aligner)
-                .collect(),
+        let contig_indexes_to_consider: HashSet<usize> = match contig_indexes {
+            Some(indexes) if indexes.len() < self.len() => indexes.clone(),
             _ => self
                 .contigs
                 .iter()
-                .map(|contig| &contig.aligner)
-                .collect_vec(),
+                .map(|contig| contig.aligner.contig_idx as usize)
+                .collect::<HashSet<_>>(),
         };
-        traceback_all(&aligners, n)
+        let aligners = self.contigs.iter().map(|c| &c.aligner).collect_vec();
+        traceback_all(&aligners, n, &contig_indexes_to_consider)
     }
 }
 
