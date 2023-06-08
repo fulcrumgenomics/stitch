@@ -219,11 +219,19 @@ pub struct Align {
     /// when a prefix (or suffix) of the read is unaligned, and the alignment starts within the
     /// slop of the target start (or target end).  In this case, the prefix is appended to the
     /// aligned suffix and the new read is re-aligned.
-    #[clap(long, short = 'C', default_value = "20", display_order = 19)]
+    #[clap(long, short = 'C', default_value = "20", display_order = 20)]
     pub circular_slop: usize,
 
+    /// Filter out secondary alignments with score X% worse than the primary alignment.
+    #[clap(long, default_value = "false", display_order = 20)]
+    pub filter_secondary: bool,
+
+    /// Filter out secondary alignments with score X% worse than the primary alignment.
+    #[clap(long, default_value = "10", display_order = 21)]
+    pub filter_secondary_pct: f32,
+
     /// The compression level of the output BAM
-    #[clap(long, short = 'c', default_value = "0", display_order = 21)]
+    #[clap(long, short = 'c', default_value = "0", display_order = 22)]
     pub compression: u8,
 }
 
@@ -237,7 +245,7 @@ impl Align {
         let progress_logger = ProgLogBuilder::new()
             .name("fqcv-progress")
             .noun("reads")
-            .verb("Aligned")
+            .verb("Processed")
             .unit(
                 (READER_CHANNEL_NUM_CHUNKS * self.threads)
                     .try_into()
@@ -354,16 +362,8 @@ impl Align {
                 let msg = receiver.recv()?;
                 for (fastq, result, alt_score) in msg.results {
                     progress_logger.record();
-                    let records = to_records(
-                        &fastq,
-                        result,
-                        !self.soft_clip,
-                        self.use_eq_and_x,
-                        alt_score,
-                        &scoring,
-                        self.pick_primary,
-                        &target_seqs,
-                    )?;
+                    let records =
+                        to_records(&fastq, result, alt_score, &scoring, &target_seqs, self)?;
                     for record in &records {
                         writer.write_record(&header, record)?;
                     }
