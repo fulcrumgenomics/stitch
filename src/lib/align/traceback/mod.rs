@@ -147,21 +147,26 @@ pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -
             alignment_length = cur_len;
         }
     }
-    traceback_from(aligners, n, aligners[aligner_offset].contig_idx)
+    traceback_from(aligners, n, aligners[aligner_offset].contig_idx).unwrap()
 }
 
 pub fn traceback_all<F: MatchFunc>(
     aligners: &[&SingleContigAligner<F>],
     n: usize,
+    contig_indexes_to_consider: &HashSet<usize>,
 ) -> Vec<Alignment> {
     let mut alignments = Vec::new();
     let mut contig_indexes_seen: HashSet<usize> = HashSet::new();
-    while contig_indexes_seen.len() < aligners.len() {
+
+    while contig_indexes_seen.len() < contig_indexes_to_consider.len() {
         // Get the highest scoring alignment that _ends_ in a contig we haven't seen
         let mut aligner_offset = 0;
         let mut score = MIN_SCORE;
         let mut alignment_length = 0;
         for (cur_aligner_offset, cur_aligner) in aligners.iter().enumerate() {
+            if !contig_indexes_to_consider.contains(&(cur_aligner.contig_idx as usize)) {
+                continue;
+            }
             if contig_indexes_seen.contains(&(cur_aligner.contig_idx as usize)) {
                 continue;
             }
@@ -181,15 +186,25 @@ pub fn traceback_all<F: MatchFunc>(
             }
         }
         // Add the contigs from this alignment to the ones already seen
-        let alignment = traceback_from(aligners, n, aligners[aligner_offset].contig_idx);
-        contig_indexes_seen.insert(alignment.start_contig_idx);
-        contig_indexes_seen.insert(alignment.end_contig_idx);
-        for op in &alignment.operations {
-            if let AlignmentOperation::Xjump(idx, _) = op {
-                contig_indexes_seen.insert(*idx);
+        match traceback_from(aligners, n, aligners[aligner_offset].contig_idx) {
+            None => continue,
+            Some(alignment) => {
+                if contig_indexes_to_consider.contains(&alignment.start_contig_idx) {
+                    contig_indexes_seen.insert(alignment.start_contig_idx);
+                }
+                if contig_indexes_to_consider.contains(&alignment.end_contig_idx) {
+                    contig_indexes_seen.insert(alignment.end_contig_idx);
+                }
+                for op in &alignment.operations {
+                    if let AlignmentOperation::Xjump(idx, _) = op {
+                        if contig_indexes_to_consider.contains(idx) {
+                            contig_indexes_seen.insert(*idx);
+                        }
+                    }
+                }
+                alignments.push(alignment);
             }
         }
-        alignments.push(alignment);
     }
 
     alignments
@@ -199,7 +214,7 @@ pub fn traceback_from<F: MatchFunc>(
     aligners: &[&SingleContigAligner<F>],
     n: usize,
     contig_index: u32,
-) -> Alignment {
+) -> Option<Alignment> {
     let mut j = n;
     let mut operations: Vec<AlignmentOperation> = Vec::with_capacity(n);
     let mut xstart: usize = 0usize;
@@ -210,7 +225,13 @@ pub fn traceback_from<F: MatchFunc>(
 
     let mut contig_idx_to_aligner = HashMap::with_capacity(aligners.len());
     for aligner in aligners {
-        contig_idx_to_aligner.insert(aligner.contig_idx, aligner);
+        if !aligner.traceback.matrix.is_empty() {
+            contig_idx_to_aligner.insert(aligner.contig_idx, aligner);
+        }
+    }
+
+    if contig_idx_to_aligner.is_empty() || !contig_idx_to_aligner.contains_key(&contig_index) {
+        return None;
     }
 
     let mut cur_aligner = contig_idx_to_aligner.get(&contig_index).unwrap();
@@ -227,7 +248,10 @@ pub fn traceback_from<F: MatchFunc>(
     let mut xend = cur_aligner.traceback.rows - 1;
     let mut last_layer = cur_aligner.traceback.get(i, j).get_s().tb;
     loop {
-        cur_aligner = contig_idx_to_aligner.get(&cur_contig_idx).unwrap();
+        cur_aligner = match contig_idx_to_aligner.get(&cur_contig_idx) {
+            None => return None,
+            Some(aligner) => aligner,
+        };
         let next_layer: u16;
         match last_layer {
             TB_START => break,
@@ -252,7 +276,10 @@ pub fn traceback_from<F: MatchFunc>(
                 if s_value.idx != cur_contig_idx || s_from != i - 1 {
                     operations.push(AlignmentOperation::Xjump(cur_contig_idx as usize, i - 1));
                     cur_contig_idx = s_value.idx;
-                    cur_aligner = contig_idx_to_aligner.get(&cur_contig_idx).unwrap();
+                    cur_aligner = match contig_idx_to_aligner.get(&cur_contig_idx) {
+                        None => return None,
+                        Some(aligner) => aligner,
+                    };
                 }
                 i = s_from;
                 j -= 1;
@@ -298,7 +325,10 @@ pub fn traceback_from<F: MatchFunc>(
                 let s_value = cur_aligner.traceback.get(i, j).get_s();
                 operations.push(AlignmentOperation::Xjump(cur_contig_idx as usize, i));
                 cur_contig_idx = s_value.idx;
-                cur_aligner = contig_idx_to_aligner.get(&cur_contig_idx).unwrap();
+                cur_aligner = match contig_idx_to_aligner.get(&cur_contig_idx) {
+                    None => return None,
+                    Some(aligner) => aligner,
+                };
                 i = s_value.from as usize;
                 next_layer = cur_aligner.traceback.get(i, j).get_s().tb;
             }
@@ -320,7 +350,7 @@ pub fn traceback_from<F: MatchFunc>(
             yend = 0;
         }
     }
-    Alignment {
+    let alignment = Alignment {
         score,
         ystart,
         xstart,
@@ -333,5 +363,6 @@ pub fn traceback_from<F: MatchFunc>(
         operations,
         mode: AlignmentMode::Custom,
         length: alignment_length as usize,
-    }
+    };
+    Some(alignment)
 }
