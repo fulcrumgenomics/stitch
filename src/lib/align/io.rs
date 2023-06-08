@@ -41,7 +41,7 @@ pub struct InputMessage {
 /// 2. None if no alignment was found, otherwise some tuple of pairwise alignment and the target
 ///   strand to which the alignment was made.
 /// 3. The alignment score, if aligned.
-pub type OutputResult = (FastqOwnedRecord, Option<Alignment>, Option<i32>);
+pub type OutputResult = (FastqOwnedRecord, Vec<Alignment>, Option<i32>);
 
 /// The container for a chunk of pairwise alignments, one per input FASTQ record.
 pub struct OutputMessage {

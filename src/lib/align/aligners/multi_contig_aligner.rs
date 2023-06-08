@@ -5,7 +5,7 @@ use crate::align::aligners::constants::DEFAULT_ALIGNER_CAPACITY;
 use crate::align::aligners::single_contig_aligner::SingleContigAligner;
 use crate::align::alignment::Alignment;
 use crate::align::scoring::Scoring;
-use crate::align::traceback::traceback;
+use crate::align::traceback::{traceback, traceback_all};
 use bio::alignment::pairwise::MatchFunc;
 use bio::utils::TextSlice;
 use itertools::Itertools;
@@ -348,6 +348,27 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
             .map(|contig| &contig.aligner)
             .collect_vec();
         traceback(&aligners, n)
+    }
+
+    pub fn traceback_all(
+        &mut self,
+        n: usize,
+        contig_indexes: Option<&HashSet<usize>>,
+    ) -> Vec<Alignment> {
+        let aligners: Vec<&SingleContigAligner<_>> = match contig_indexes {
+            Some(indexes) if indexes.len() < self.len() => self
+                .contigs
+                .iter()
+                .filter(|contig| indexes.contains(&(contig.aligner.contig_idx as usize)))
+                .map(|c| &c.aligner)
+                .collect(),
+            _ => self
+                .contigs
+                .iter()
+                .map(|contig| &contig.aligner)
+                .collect_vec(),
+        };
+        traceback_all(&aligners, n)
     }
 }
 
