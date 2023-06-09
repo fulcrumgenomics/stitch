@@ -210,6 +210,13 @@ impl Alignment {
             return self.clone();
         }
 
+        // There should be no leading or trailing clips
+        assert!(!matches!(self.operations[0], Xclip(_) | Yclip(_)));
+        assert!(!matches!(
+            self.operations[self.operations.len() - 1],
+            Xclip(_) | Yclip(_)
+        ));
+
         let mut x_index: usize = self.xstart;
         let mut y_index: usize = self.ystart;
         let mut contig_index: usize = self.start_contig_idx;

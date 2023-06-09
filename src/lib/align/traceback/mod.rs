@@ -1,6 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use bit_set::BitSet;
 
 use crate::align::aligners::constants::MIN_SCORE;
+use crate::util::index_map::IndexMap;
 
 use super::{
     aligners::{
@@ -153,10 +154,11 @@ pub fn traceback<F: MatchFunc>(aligners: &[&SingleContigAligner<F>], n: usize) -
 pub fn traceback_all<F: MatchFunc>(
     aligners: &[&SingleContigAligner<F>],
     n: usize,
-    contig_indexes_to_consider: &HashSet<usize>,
+    contig_indexes_to_consider: &BitSet<u32>,
 ) -> Vec<Alignment> {
     let mut alignments = Vec::new();
-    let mut contig_indexes_seen: HashSet<usize> = HashSet::new();
+    let mut contig_indexes_seen: BitSet<u32> =
+        BitSet::with_capacity(contig_indexes_to_consider.len());
 
     while contig_indexes_seen.len() < contig_indexes_to_consider.len() {
         // Get the highest scoring alignment that _ends_ in a contig we haven't seen
@@ -164,10 +166,10 @@ pub fn traceback_all<F: MatchFunc>(
         let mut score = MIN_SCORE;
         let mut alignment_length = 0;
         for (cur_aligner_offset, cur_aligner) in aligners.iter().enumerate() {
-            if !contig_indexes_to_consider.contains(&(cur_aligner.contig_idx as usize)) {
+            if !contig_indexes_to_consider.contains(cur_aligner.contig_idx as usize) {
                 continue;
             }
-            if contig_indexes_seen.contains(&(cur_aligner.contig_idx as usize)) {
+            if contig_indexes_seen.contains(cur_aligner.contig_idx as usize) {
                 continue;
             }
             let m: usize = cur_aligner.traceback.rows - 1;
@@ -187,18 +189,24 @@ pub fn traceback_all<F: MatchFunc>(
         }
         // Add the contigs from this alignment to the ones already seen
         match traceback_from(aligners, n, aligners[aligner_offset].contig_idx) {
-            None => continue,
+            None => {
+                let contig_index = aligners[aligner_offset].contig_idx as usize;
+                if contig_indexes_to_consider.contains(contig_index) {
+                    contig_indexes_seen.insert(contig_index);
+                }
+                continue;
+            }
             Some(alignment) => {
-                if contig_indexes_to_consider.contains(&alignment.start_contig_idx) {
+                if contig_indexes_to_consider.contains(alignment.start_contig_idx) {
                     contig_indexes_seen.insert(alignment.start_contig_idx);
                 }
-                if contig_indexes_to_consider.contains(&alignment.end_contig_idx) {
+                if contig_indexes_to_consider.contains(alignment.end_contig_idx) {
                     contig_indexes_seen.insert(alignment.end_contig_idx);
                 }
                 for op in &alignment.operations {
-                    if let AlignmentOperation::Xjump(idx, _) = op {
+                    if let AlignmentOperation::Xjump(idx, _) = *op {
                         if contig_indexes_to_consider.contains(idx) {
-                            contig_indexes_seen.insert(*idx);
+                            contig_indexes_seen.insert(idx);
                         }
                     }
                 }
@@ -223,18 +231,17 @@ pub fn traceback_from<F: MatchFunc>(
 
     assert!(!aligners.is_empty());
 
-    let mut contig_idx_to_aligner = HashMap::with_capacity(aligners.len());
-    for aligner in aligners {
+    let max_contig_idx = aligners.iter().map(|a| a.contig_idx).max().unwrap();
+    let mut contig_idx_to_aligner_idx = IndexMap::new(max_contig_idx as usize);
+    for (aligner_index, aligner) in aligners.iter().enumerate() {
         if !aligner.traceback.matrix.is_empty() {
-            contig_idx_to_aligner.insert(aligner.contig_idx, aligner);
+            contig_idx_to_aligner_idx.put_u32(aligner.contig_idx, aligner_index);
         }
     }
-
-    if contig_idx_to_aligner.is_empty() || !contig_idx_to_aligner.contains_key(&contig_index) {
+    if !contig_idx_to_aligner_idx.contains_u32(contig_index) {
         return None;
     }
-
-    let mut cur_aligner = contig_idx_to_aligner.get(&contig_index).unwrap();
+    let mut cur_aligner = aligners[contig_idx_to_aligner_idx.get_u32(contig_index).unwrap()];
     let score = cur_aligner.S[n % 2][cur_aligner.traceback.rows - 1];
     let alignment_length = cur_aligner
         .traceback
@@ -248,9 +255,9 @@ pub fn traceback_from<F: MatchFunc>(
     let mut xend = cur_aligner.traceback.rows - 1;
     let mut last_layer = cur_aligner.traceback.get(i, j).get_s().tb;
     loop {
-        cur_aligner = match contig_idx_to_aligner.get(&cur_contig_idx) {
+        cur_aligner = match contig_idx_to_aligner_idx.get_u32(cur_contig_idx) {
             None => return None,
-            Some(aligner) => aligner,
+            Some(idx) => aligners[idx],
         };
         let next_layer: u16;
         match last_layer {
@@ -276,9 +283,9 @@ pub fn traceback_from<F: MatchFunc>(
                 if s_value.idx != cur_contig_idx || s_from != i - 1 {
                     operations.push(AlignmentOperation::Xjump(cur_contig_idx as usize, i - 1));
                     cur_contig_idx = s_value.idx;
-                    cur_aligner = match contig_idx_to_aligner.get(&cur_contig_idx) {
+                    cur_aligner = match contig_idx_to_aligner_idx.get_u32(cur_contig_idx) {
                         None => return None,
-                        Some(aligner) => aligner,
+                        Some(idx) => aligners[idx],
                     };
                 }
                 i = s_from;
@@ -325,9 +332,9 @@ pub fn traceback_from<F: MatchFunc>(
                 let s_value = cur_aligner.traceback.get(i, j).get_s();
                 operations.push(AlignmentOperation::Xjump(cur_contig_idx as usize, i));
                 cur_contig_idx = s_value.idx;
-                cur_aligner = match contig_idx_to_aligner.get(&cur_contig_idx) {
+                cur_aligner = match contig_idx_to_aligner_idx.get_u32(cur_contig_idx) {
                     None => return None,
-                    Some(aligner) => aligner,
+                    Some(idx) => aligners[idx],
                 };
                 i = s_value.from as usize;
                 next_layer = cur_aligner.traceback.get(i, j).get_s().tb;
