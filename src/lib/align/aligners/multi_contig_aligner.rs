@@ -1,13 +1,12 @@
-use std::collections::{HashMap, HashSet};
-
-use crate::align::aligners::constants::AlignmentOperation::Xjump;
 use crate::align::aligners::constants::DEFAULT_ALIGNER_CAPACITY;
 use crate::align::aligners::single_contig_aligner::SingleContigAligner;
 use crate::align::alignment::Alignment;
 use crate::align::scoring::Scoring;
-use crate::align::traceback::{traceback, traceback_all};
+use crate::align::traceback::{traceback, traceback_all, traceback_from};
+use crate::util::index_map::IndexMap;
 use bio::alignment::pairwise::MatchFunc;
 use bio::utils::TextSlice;
+use bit_set::BitSet;
 use itertools::Itertools;
 
 use super::JumpInfo;
@@ -50,18 +49,22 @@ impl<'a, F: MatchFunc> ContigAligner<'a, F> {
 
 pub struct MultiContigAligner<'a, F: MatchFunc> {
     contigs: Vec<ContigAligner<'a, F>>,
+    to_opposite_strand: IndexMap<usize>,
 }
 
 impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
-    /// Create new aligner instance with given scorer.
-    ///
-    /// # Arguments
-    ///
-    /// * `scoring_fn` - function that returns an alignment scorer
-    ///    (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
+    #[allow(dead_code)]
     pub fn new() -> Self {
         MultiContigAligner {
             contigs: Vec::new(),
+            to_opposite_strand: IndexMap::new(128),
+        }
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        MultiContigAligner {
+            contigs: Vec::with_capacity(capacity),
+            to_opposite_strand: IndexMap::new(capacity),
         }
     }
 
@@ -106,6 +109,23 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
             circular,
         );
         self.contigs.push(contig);
+        if contig_idx >= self.to_opposite_strand.capacity() {
+            self.to_opposite_strand.reserve(contig_idx);
+        }
+        // find the contig index for the opposite strand
+        for contig in &self.contigs {
+            if contig.name == name && contig.is_forward != is_forward {
+                assert!(self
+                    .to_opposite_strand
+                    .get_u32(contig.aligner.contig_idx)
+                    .is_none());
+                self.to_opposite_strand
+                    .put(contig_idx, contig.aligner.contig_idx as usize);
+                self.to_opposite_strand
+                    .put_u32(contig.aligner.contig_idx, contig_idx);
+                break;
+            }
+        }
     }
 
     fn jump_info_for_contig(contig: &ContigAligner<'a, F>, j: usize) -> JumpInfo {
@@ -144,32 +164,6 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
             .copied()
     }
 
-    pub fn custom_single_contig(&mut self, y: TextSlice<'_>, idx: usize) -> Alignment {
-        // get the single contig to which to align
-        let contig = &mut self.contigs[idx];
-        // save the index of this contig
-        let prev_contig_idx = contig.aligner.contig_idx;
-        // set the contig to zero for the single_aligner traceback and jumps
-        contig.aligner.contig_idx = 0;
-        // align!
-        let mut alignment = contig.aligner.custom(contig.seq, y);
-        // change the contig index of the alignment, including any Xjumps
-        alignment.start_contig_idx = prev_contig_idx as usize;
-        alignment.end_contig_idx = prev_contig_idx as usize;
-        alignment.operations = alignment
-            .operations
-            .iter()
-            .map(|op| match op {
-                Xjump(_, x_index) => Xjump(prev_contig_idx as usize, *x_index),
-                op => *op,
-            })
-            .collect_vec();
-        // restore the contig index
-        contig.aligner.contig_idx = prev_contig_idx;
-        // return the alignment
-        alignment
-    }
-
     /// The core function to compute the alignment
     ///
     /// # Arguments
@@ -180,15 +174,11 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
     pub fn custom_with_subset(
         &mut self,
         y: TextSlice<'_>,
-        contig_indexes: Option<&HashSet<usize>>,
+        contig_indexes: Option<&BitSet<u32>>,
     ) -> Alignment {
         match contig_indexes {
-            Some(indexes) if indexes.len() == 1 => {
-                // If there's only a single contig, we can use the single-contig aligner
-                let contig_index = *indexes.iter().next().unwrap();
-                self.custom_single_contig(y, contig_index)
-            }
-            Some(indexes) if indexes.len() < self.len() => {
+            None => self.custom(y),
+            Some(indexes) => {
                 assert!(!indexes.is_empty(), "Subsetted to an empty set of contigs");
                 // Find the contigs to just those in the set of indexes, and keep the ones
                 // that were excluded so we can restor the contigs later
@@ -196,7 +186,7 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
                 let mut excluded = Vec::with_capacity(self.len() - indexes.len());
                 while !self.contigs.is_empty() {
                     let contig = self.contigs.remove(0);
-                    if indexes.contains(&(contig.aligner.contig_idx as usize)) {
+                    if indexes.contains(contig.aligner.contig_idx as usize) {
                         included.push(contig);
                     } else {
                         excluded.push(contig);
@@ -225,7 +215,6 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
                 // return the alignment
                 aln
             }
-            _ => self.custom(y),
         }
     }
 
@@ -238,14 +227,33 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
     pub fn custom(&mut self, y: TextSlice<'_>) -> Alignment {
         let n = y.len();
 
-        // for each contig considered, find the same contig but on the opposite strand
-        let mut name_to_forward: HashMap<String, usize> = HashMap::new();
-        let mut name_to_revcomp: HashMap<String, usize> = HashMap::new();
-        for (idx, contig) in self.contigs.iter().enumerate() {
-            if contig.is_forward {
-                name_to_forward.insert(contig.name.clone(), idx);
-            } else {
-                name_to_revcomp.insert(contig.name.clone(), idx);
+        let max_contig_index = self
+            .contigs
+            .iter()
+            .map(|c| c.aligner.contig_idx)
+            .max()
+            .unwrap() as usize;
+
+        let mut to_opposite_strand: IndexMap<usize> = IndexMap::new(max_contig_index);
+        // find the contig index for the opposite strand
+        for i in 0..self.contigs.len() {
+            let left_contig = &self.contigs[i];
+            let left_contig_idx = left_contig.aligner.contig_idx as usize;
+            if to_opposite_strand.contains(left_contig_idx) {
+                continue;
+            }
+            for j in (i + 1)..self.contigs.len() {
+                let right_contig = &self.contigs[j];
+                let right_contig_idx = right_contig.aligner.contig_idx as usize;
+                if left_contig.name == right_contig.name
+                    && left_contig.is_forward != right_contig.is_forward
+                {
+                    assert!(to_opposite_strand
+                        .get_u32(left_contig.aligner.contig_idx)
+                        .is_none());
+                    to_opposite_strand.put(left_contig_idx, j);
+                    to_opposite_strand.put(right_contig_idx, i);
+                }
             }
         }
 
@@ -265,31 +273,29 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
             }
 
             // pre-compute the inter-contig jump scores for each contig
-            let inter_contig_jump_infos = self
-                .contigs
-                .iter()
-                .map(|c| {
-                    let mut info = c.aligner.get_jump_info(
-                        c.len(),
-                        j - 1,
-                        c.aligner.scoring.jump_score_inter_contig,
-                    );
-                    info.idx = c.aligner.contig_idx;
-                    info
-                })
-                .collect_vec();
+            let mut inter_contig_jump_infos = Vec::with_capacity(self.contigs.len());
+            for contig in &self.contigs {
+                let mut info = contig.aligner.get_jump_info(
+                    contig.len(),
+                    j - 1,
+                    contig.aligner.scoring.jump_score_inter_contig,
+                );
+                info.idx = contig.aligner.contig_idx;
+                inter_contig_jump_infos.push(info);
+            }
 
             // Get the best jump for each contig
-            let mut best_jump_infos = HashMap::new();
+            let mut best_jump_infos: IndexMap<JumpInfo> = IndexMap::new(max_contig_index);
             for contig in &self.contigs {
-                let opp_contig = {
-                    let idx = if contig.is_forward {
-                        name_to_revcomp.get(&contig.name)
-                    } else {
-                        name_to_forward.get(&contig.name)
-                    };
-                    idx.map(|i| &self.contigs[*i])
-                };
+                // let opp_contig = self
+                //     .to_opposite_strand
+                //     .get_u32(contig.aligner.contig_idx)
+                //     // TODO: does not work when subsetting the contigs
+                //     .map(|idx| &self.contigs[idx]);
+                let opp_contig = to_opposite_strand
+                    .get_u32(contig.aligner.contig_idx)
+                    // TODO: does not work when subsetting the contigs
+                    .map(|idx| &self.contigs[idx]);
 
                 // Evaluate three jumps
                 // 1. jump to the same contig and strand
@@ -317,12 +323,12 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
                         best_jump_info = jump_info;
                     }
                 }
-                best_jump_infos.insert(contig.aligner.contig_idx, best_jump_info);
+                best_jump_infos.put_u32(contig.aligner.contig_idx, best_jump_info);
             }
 
             // Fill in the column
             for contig in &mut self.contigs {
-                let jump_info = *best_jump_infos.get(&contig.aligner.contig_idx).unwrap();
+                let jump_info = best_jump_infos.get_u32(contig.aligner.contig_idx).unwrap();
                 contig.aligner.fill_column(
                     contig.seq,
                     y,
@@ -353,18 +359,27 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
     pub fn traceback_all(
         &mut self,
         n: usize,
-        contig_indexes: Option<&HashSet<usize>>,
+        contig_indexes: Option<&BitSet<u32>>,
     ) -> Vec<Alignment> {
-        let contig_indexes_to_consider: HashSet<usize> = match contig_indexes {
+        let contig_indexes_to_consider: BitSet<u32> = match contig_indexes {
             Some(indexes) if indexes.len() < self.len() => indexes.clone(),
             _ => self
                 .contigs
                 .iter()
                 .map(|contig| contig.aligner.contig_idx as usize)
-                .collect::<HashSet<_>>(),
+                .collect::<BitSet<_>>(),
         };
         let aligners = self.contigs.iter().map(|c| &c.aligner).collect_vec();
         traceback_all(&aligners, n, &contig_indexes_to_consider)
+    }
+
+    pub fn traceback_from(&mut self, n: usize, contig_index: usize) -> Option<Alignment> {
+        let aligners = self
+            .contigs
+            .iter()
+            .map(|contig| &contig.aligner)
+            .collect_vec();
+        traceback_from(&aligners, n, contig_index as u32)
     }
 }
 

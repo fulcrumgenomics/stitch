@@ -5,7 +5,7 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::collections::{HashMap, HashSet};
+use bit_set::BitSet;
 
 use anyhow::{ensure, Context, Result};
 use bio::alignment::pairwise::MatchFunc;
@@ -14,8 +14,8 @@ use crate::align::aligners::constants::AlignmentOperation::{Del, Ins, Match, Sub
 use crate::align::PrimaryPickingStrategy;
 use crate::commands::align::Align;
 use crate::util::dna::reverse_complement;
+use crate::util::index_map::IndexMap;
 use crate::util::target_seq::{TargetHash, TargetSeq};
-use itertools::{self, Itertools};
 
 use crate::align::aligners::constants::{AlignmentMode, MIN_SCORE};
 use crate::align::aligners::multi_contig_aligner::MultiContigAligner;
@@ -153,7 +153,9 @@ pub fn build_aligners<'a>(opts: &Align, target_seqs: &'a [TargetSeq]) -> Aligner
         opts.w,
     );
 
-    let mut multi_contig: MultiContigAligner<'a, MatchParams> = MultiContigAligner::new();
+    let capacity = target_seqs.len() * (if opts.double_strand { 2 } else { 1 });
+    let mut multi_contig: MultiContigAligner<'a, MatchParams> =
+        MultiContigAligner::with_capacity(capacity);
     for target_seq in target_seqs {
         let opts = &opts.clone();
         multi_contig.add_contig(
@@ -191,7 +193,8 @@ impl Aligners<'_, MatchParams> {
         opts: &Align,
     ) -> (Vec<Alignment>, Option<i32>) {
         let query = record.seq();
-        let mut contig_idx_to_prealign_score: HashMap<usize, i32> = HashMap::new();
+        let mut contig_idx_to_prealign_score: IndexMap<i32> =
+            IndexMap::new(self.multi_contig.len());
         if opts.pre_align {
             // Align the record to all the targets in a local banded alignment. If there is at least one
             // alignment with minimum score, then align uses the full aligner.
@@ -206,7 +209,7 @@ impl Aligners<'_, MatchParams> {
                     opts.pre_align_min_score,
                 );
                 if let Some(score) = score_fwd {
-                    contig_idx_to_prealign_score.insert(
+                    contig_idx_to_prealign_score.put(
                         self.multi_contig
                             .contig_index_for_strand(true, &target_seq.name)
                             .unwrap(),
@@ -214,7 +217,7 @@ impl Aligners<'_, MatchParams> {
                     );
                 }
                 if let Some(score) = score_revcomp {
-                    contig_idx_to_prealign_score.insert(
+                    contig_idx_to_prealign_score.put(
                         self.multi_contig
                             .contig_index_for_strand(false, &target_seq.name)
                             .unwrap(),
@@ -233,12 +236,9 @@ impl Aligners<'_, MatchParams> {
         }
 
         // Get the contigs to align based on if we pre-aligned or not
-        let contigs_to_align: Option<HashSet<usize>> =
+        let contigs_to_align: Option<BitSet<u32>> =
             if opts.pre_align && opts.pre_align_subset_contigs {
-                let indexes = contig_idx_to_prealign_score
-                    .keys()
-                    .copied()
-                    .collect::<HashSet<usize>>();
+                let indexes = contig_idx_to_prealign_score.keys().collect::<BitSet<u32>>();
                 assert!(!indexes.is_empty(), "Bug: should have returned above");
                 Some(indexes)
             } else {
@@ -247,6 +247,7 @@ impl Aligners<'_, MatchParams> {
             };
 
         // Align to all the contigs! (or those that had a "good enough" pre-align score)
+        // This populates the traceback matrices too for suboptimal alignments.
         let original_alignment = self.multi_contig_align(query, contigs_to_align.as_ref());
 
         // Get all alignments if we want to keep sub-optimal alignments, or just process this one
@@ -259,105 +260,64 @@ impl Aligners<'_, MatchParams> {
             // Re-align around the origin if the contig is circular or we force circular
             // NB: must do this after tracing back all the above since we modify the traceback matrix below.
             for alignment in new_alignments {
-                let alignment = self
-                    .realign_origin(query, &alignment, opts.circular_slop, false)
-                    .unwrap_or(alignment);
+                // remove leading/trailing clipping, needed to for origin re-alignment
+                let alignment = self.remove_clipping(alignment);
+                let alignment = self.realign_origin(query, alignment, opts.circular_slop, false);
                 alignments.push(alignment);
+            }
+
+            // Filter out sub-optimal alignments
+            if alignments.len() > 1 {
+                alignments.sort_by_key(|a| -a.score); // descending
+                let min_score = alignments[0].score as f32 * opts.suboptimal_pct / 100.0;
+                let mut new_alignments = Vec::new();
+                for alignment in alignments {
+                    if alignment.score as f32 >= min_score {
+                        new_alignments.push(alignment);
+                    }
+                }
+                alignments = new_alignments;
             }
         } else {
             // Re-align around the origin if the contig is circular or we force circular
-            let alignment = self
-                .realign_origin(query, &original_alignment, opts.circular_slop, false)
-                .unwrap_or(original_alignment);
+            let alignment =
+                self.realign_origin(query, original_alignment, opts.circular_slop, false);
             alignments.push(alignment);
         }
-        let mut best_alignment = alignments[0].clone();
-
-        // For circular contigs, we need to re-align around the origin.
-        // This only works with modes: "local" and "target-local" only.
-        // Only re-align only if the current alignment would be re-aligned.
-        let (contig_at_start, contig_at_end) = self
-            .get_start_and_end_contig_indexes_for_realignmnet(&best_alignment, opts.circular_slop);
-        let indexes_for_single_contig_aln = match &contigs_to_align {
-            Some(indexes) => {
-                let mut indexes = indexes.iter().copied().collect_vec();
-                indexes.sort_unstable();
-                indexes
-            }
-            None => (0..self.multi_contig.len()).collect_vec(),
-        };
-        if matches!(opts.mode, AlignmentMode::Local | AlignmentMode::TargetLocal)
-            && contig_at_start.is_none()
-            && contig_at_end.is_none()
-            && indexes_for_single_contig_aln.len() > 1
-        {
-            for contig_idx in indexes_for_single_contig_aln {
-                if !self.multi_contig.is_circular(contig_idx) {
-                    continue;
-                }
-                // align!
-                let mut single_contig_aln =
-                    self.multi_contig.custom_single_contig(query, contig_idx);
-                // re-align around the origin
-                single_contig_aln = self
-                    .realign_origin(query, &single_contig_aln, opts.circular_slop, true)
-                    .unwrap_or(single_contig_aln);
-
-                // update the alignment if the single-contig alignment has better score
-                if single_contig_aln.score > best_alignment.score
-                    || (single_contig_aln.score == best_alignment.score
-                        && single_contig_aln.length > best_alignment.length)
-                {
-                    // add the best alignment
-                    alignments.push(best_alignment);
-                    best_alignment = single_contig_aln;
-                } else {
-                    // keep all alignments
-                    alignments.push(single_contig_aln);
-                }
-            }
-        }
-
-        // Filter out sub-optimal alignments
-        alignments.sort_by_key(|a| -a.score); // descending
-        let min_score = alignments[0].score as f32 * opts.suboptimal_pct / 100.0;
-        let mut new_alignments = Vec::new();
-        for alignment in alignments {
-            if alignment.score as f32 >= min_score {
-                new_alignments.push(alignment);
-            }
-        }
-        alignments = new_alignments;
 
         // Get the maximum pre-align score to return
         let prealign_score: Option<i32> = contig_idx_to_prealign_score.values().copied().max();
         (alignments, prealign_score)
     }
 
-    fn multi_contig_align(
-        &mut self,
-        query: &[u8],
-        contig_indexes: Option<&HashSet<usize>>,
-    ) -> Alignment {
-        // Check if we should subset the contig indexes
-        let mut aln = self.multi_contig.custom_with_subset(query, contig_indexes);
+    /// Removes leading and trailing clipping
+    fn remove_clipping(&self, mut aln: Alignment) -> Alignment {
         match self.mode {
             AlignmentMode::Local | AlignmentMode::QueryLocal | AlignmentMode::TargetLocal => {
                 aln.operations
                     .retain(|x| matches!(*x, Match | Subst | Ins | Del | Xjump(_, _)));
             }
-            AlignmentMode::Global => (), // do nothing
+            AlignmentMode::Global => (), // do nothing, there can be no clipping!
             AlignmentMode::Custom => unreachable!(),
         }
         aln
     }
 
-    fn get_start_and_end_contig_indexes_for_realignmnet(
+    fn multi_contig_align(
+        &mut self,
+        query: &[u8],
+        contig_indexes: Option<&BitSet<u32>>,
+    ) -> Alignment {
+        // Check if we should subset the contig indexes
+        let aln = self.multi_contig.custom_with_subset(query, contig_indexes);
+        self.remove_clipping(aln)
+    }
+
+    fn get_start_and_end_contig_indexes_for_realignment(
         &self,
         alignment: &Alignment,
         slop: usize,
     ) -> (Option<usize>, Option<usize>) {
-        // Get the contig at the start of the read
         let contig_at_start: Option<usize> = if alignment.xstart <= slop
             && self.multi_contig.is_circular(alignment.start_contig_idx)
         {
@@ -394,10 +354,31 @@ impl Aligners<'_, MatchParams> {
         let contig_at_end = if contig_at_end.is_none() || 0 == alignment.ystart {
             None
         } else {
-            contig_at_start
+            contig_at_end
         };
 
         (contig_at_start, contig_at_end)
+    }
+
+    fn realign_and_split_at_y(
+        &mut self,
+        query: &[u8],
+        best_alignment: &Alignment,
+        contig_indexes: &Option<BitSet<u32>>,
+        contig_index: usize,
+        y_pivot: usize,
+    ) -> Option<Alignment> {
+        self.multi_contig_align(query, contig_indexes.as_ref()); // to get the traceback matrix
+        let new_alignment = self.multi_contig.traceback_from(query.len(), contig_index);
+        if let Some(new_alignment) = new_alignment {
+            if new_alignment.score > best_alignment.score
+                && new_alignment.start_contig_idx == contig_index
+                && best_alignment.end_contig_idx == contig_index
+            {
+                return Some(self.remove_clipping(new_alignment).split_at_y(y_pivot));
+            }
+        }
+        None
     }
 
     /// Realign alignments where `y` may align across the origin.
@@ -412,21 +393,22 @@ impl Aligners<'_, MatchParams> {
     fn realign_origin(
         &mut self,
         query: &[u8],
-        alignment: &Alignment,
+        alignment: Alignment,
         slop: usize,
         all_contigs: bool,
-    ) -> Option<Alignment> {
+    ) -> Alignment {
         let (contig_at_start, contig_at_end) =
-            self.get_start_and_end_contig_indexes_for_realignmnet(alignment, slop);
+            self.get_start_and_end_contig_indexes_for_realignment(&alignment, slop);
         if contig_at_start.is_none() && contig_at_end.is_none() {
-            return None;
+            return alignment;
         }
 
-        let contig_indexes: Option<HashSet<usize>> = if all_contigs {
-            Some((0..self.multi_contig.len()).collect::<HashSet<_>>())
+        // Build the contigs to which to align
+        let contig_indexes: Option<BitSet<u32>> = if all_contigs {
+            Some((0..self.multi_contig.len()).collect::<BitSet<_>>())
         } else {
             // Use the contigs in the existing alignment
-            let mut indexes = HashSet::new();
+            let mut indexes = BitSet::new();
             indexes.insert(alignment.start_contig_idx);
             indexes.insert(alignment.end_contig_idx);
             for op in &alignment.operations {
@@ -437,56 +419,88 @@ impl Aligners<'_, MatchParams> {
             Some(indexes)
         };
 
-        let start_alignment: Option<Alignment> = if let Some(start_contig_idx) = contig_at_start {
-            // The current alignment aligns to the start of the contig, so take all bases up to
-            // the end of the current alignment and append it to the unaligned suffix.
-            let new_query: Vec<u8> = [&query[alignment.yend..], &query[..alignment.yend]].concat();
-            let new_alignment = self.multi_contig_align(&new_query, contig_indexes.as_ref());
-            // TODO: ensure that the new alignment crosses the origin
-            if new_alignment.score > alignment.score
-                && new_alignment.start_contig_idx == start_contig_idx
-                && alignment.end_contig_idx == start_contig_idx
-            {
-                Some(new_alignment.split_at_y(alignment.ylen - alignment.yend))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        // Set the best alignment to the current alignment
+        let mut best_alignment = alignment.clone();
 
-        let end_alignment: Option<Alignment> = if let Some(end_contig_idx) = contig_at_end {
-            // The current alignment aligns to the end of the contig, so take all bases up to
-            // the start of the current alignment and append it to the unaligned prefix.
-            let new_query: Vec<u8> =
-                [&query[alignment.ystart..], &query[..alignment.ystart]].concat();
-            let new_alignment = self.multi_contig_align(&new_query, contig_indexes.as_ref());
-            // TODO: ensure that the new alignment crosses the origin
-            if new_alignment.score > alignment.score
-                && new_alignment.end_contig_idx == end_contig_idx
-                && alignment.start_contig_idx == end_contig_idx
-            {
-                Some(new_alignment.split_at_y(alignment.ylen - alignment.ystart))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        // The case where the current alignment aligns from the start of the contig
+        if let Some(start_contig_idx) = contig_at_start {
+            // The first new query to realign is all bases up to the end of the current alignment
+            // and append it to the unaligned suffix.
+            let first_query: Vec<u8> =
+                [&query[alignment.yend..], &query[..alignment.yend]].concat();
+            let first_query_and_yend = (first_query, alignment.yend);
 
-        // Pick between the alignments
-        match (start_alignment, end_alignment) {
-            (Some(start), Some(end)) => {
-                if start.score >= end.score {
-                    Some(start)
-                } else {
-                    Some(end)
+            // The second new query ignores any bases in the alignment from other contigs.
+            // Therefore the pivot point is last base not aligned to the given contig starting
+            // from the beginning of the alignment.
+            let mut yend = alignment.ystart;
+            for op in &alignment.operations {
+                if let Xjump(idx, _) = op {
+                    if *idx != start_contig_idx {
+                        break;
+                    }
                 }
+                yend += op.length_on_y();
             }
-            (Some(start), _) => Some(start),
-            (_, Some(end)) => Some(end),
-            _ => None,
+            let second_query: Vec<u8> = [&query[yend..], &query[..yend]].concat();
+            let second_query_and_yend = (second_query, yend);
+
+            // Align!
+            for (query, yend) in vec![first_query_and_yend, second_query_and_yend] {
+                best_alignment = self
+                    .realign_and_split_at_y(
+                        &query,
+                        &best_alignment,
+                        &contig_indexes,
+                        start_contig_idx,
+                        alignment.ylen - yend,
+                    )
+                    .unwrap_or(best_alignment);
+            }
         }
+
+        // The case where the current alignment aligns at the end of the contig
+        if let Some(end_contig_idx) = contig_at_end {
+            // The first new query to realign is all bases up to the start of the current alignment
+            // and append it to the unaligned prefix.
+            let first_query: Vec<u8> =
+                [&query[alignment.ystart..], &query[..alignment.ystart]].concat();
+            let first_query_and_ystart = (first_query, alignment.ystart);
+
+            // The second new query ignores any bases in the alignment from other contigs.
+            // Therefore the pivot point is first base not aligned to the given contig starting
+            // from the end of the alignment.
+            let mut ystart = alignment.ystart;
+            let mut ycur = alignment.ystart;
+            let mut xidx = alignment.start_contig_idx;
+            for op in &alignment.operations {
+                if let Xjump(idx, _) = op {
+                    // update ystart when we jump from another contig to the end contig
+                    if *idx == end_contig_idx && xidx != end_contig_idx {
+                        ystart = ycur;
+                    }
+                    xidx = *idx;
+                }
+                ycur += op.length_on_y();
+            }
+            let second_query: Vec<u8> = [&query[ystart..], &query[..ystart]].concat();
+            let second_query_and_ystart = (second_query, ystart);
+
+            // Align!
+            for (query, ystart) in vec![first_query_and_ystart, second_query_and_ystart] {
+                best_alignment = self
+                    .realign_and_split_at_y(
+                        &query,
+                        &best_alignment,
+                        &contig_indexes,
+                        end_contig_idx,
+                        alignment.ylen - ystart,
+                    )
+                    .unwrap_or(best_alignment);
+            }
+        }
+
+        best_alignment
     }
 }
 
