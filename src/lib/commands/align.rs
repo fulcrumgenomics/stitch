@@ -249,7 +249,7 @@ impl Align {
         info!("Starting alignment...");
         info!("Reading reference FASTA from {}", self.ref_fasta.display());
         info!("Reading reads FASTQ from {}", self.reads_fastq.display());
-        // ensure!(self.threads > 1, "Must specify at least two threads");
+        // ensure!(self. > 1, "Must specify at least two threads");
         let progress_logger = ProgLogBuilder::new()
             .name("fqcv-progress")
             .noun("reads")
