@@ -152,7 +152,7 @@ pub struct Align {
     )]
     pub gap_open: i32,
 
-    /// Score for a gap extend (must be negative); a gap of size k cost '{-O} + {-E}*k'
+    /// Score for a gap extend (must be negative); a gap of size k costs '{-O} + {-E}*k'
     #[clap(
         long,
         short = 'E',
