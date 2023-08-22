@@ -219,7 +219,7 @@ pub struct Align {
     /// when a prefix (or suffix) of the read is unaligned, and the alignment starts within the
     /// slop of the target start (or target end).  In this case, the prefix is appended to the
     /// aligned suffix and the new read is re-aligned.
-    #[clap(long, short = 'C', default_value = "20", display_order = 20)]
+    #[clap(long, default_value = "20", display_order = 20)]
     pub circular_slop: usize,
 
     /// Filter out secondary alignments with score X% worse than the primary alignment.
@@ -249,7 +249,7 @@ impl Align {
         info!("Starting alignment...");
         info!("Reading reference FASTA from {}", self.ref_fasta.display());
         info!("Reading reads FASTQ from {}", self.reads_fastq.display());
-        // ensure!(self.threads > 1, "Must specify at least two threads");
+        // ensure!(self. > 1, "Must specify at least two threads");
         let progress_logger = ProgLogBuilder::new()
             .name("fqcv-progress")
             .noun("reads")
