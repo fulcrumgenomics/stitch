@@ -66,7 +66,7 @@ fn header_to_name(header: &[u8]) -> Result<String> {
 pub fn from_fasta(file: &PathBuf, circular: bool) -> Result<Vec<TargetSeq>> {
     let fg_io: Io = Io::new(5, BUFFER_SIZE);
 
-    // Check if the .dict file exist, and if so, check if which contigs haec a circular topology.
+    // Check if the .dict file exist, and if so, check if which contigs have a circular topology.
     let dict = file.as_path().with_extension(".dict");
     let circular_contigs = if dict.exists() {
         let mut circular_contigs = HashMap::new();
@@ -107,7 +107,6 @@ pub fn from_fasta(file: &PathBuf, circular: bool) -> Result<Vec<TargetSeq>> {
         .map(|record| {
             let sequence = record
                 .seq()
-                .to_owned()
                 .iter()
                 .map(u8::to_ascii_uppercase)
                 .collect_vec();

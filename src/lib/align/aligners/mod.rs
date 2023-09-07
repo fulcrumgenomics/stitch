@@ -25,6 +25,7 @@ use bio::alignment::pairwise::banded::Aligner as BandedAligner;
 use bio::alignment::pairwise::MatchParams;
 use bio::alignment::pairwise::Scoring as BioScoring;
 use bio::alignment::sparse::HashMapFx as BandedHashMapFx;
+use itertools::Itertools;
 use noodles::core::Position;
 use noodles::sam::alignment::Record as SamRecord;
 use noodles::sam::record::cigar::op::Kind;
@@ -192,7 +193,11 @@ impl Aligners<'_, MatchParams> {
         target_hashes: &[TargetHash],
         opts: &Align,
     ) -> (Vec<Alignment>, Option<i32>) {
-        let query = record.seq();
+        let query = record
+            .seq()
+            .iter()
+            .map(u8::to_ascii_uppercase)
+            .collect_vec();
         let mut contig_idx_to_prealign_score: IndexMap<i32> =
             IndexMap::new(self.multi_contig.len());
         if opts.pre_align {
@@ -201,7 +206,7 @@ impl Aligners<'_, MatchParams> {
             for (index, target_seq) in target_seqs.iter().enumerate() {
                 let target_hash = &target_hashes[index];
                 let (score_fwd, score_revcomp) = prealign_local_banded(
-                    query,
+                    &query,
                     target_seq,
                     target_hash,
                     &mut self.banded,
@@ -248,7 +253,7 @@ impl Aligners<'_, MatchParams> {
 
         // Align to all the contigs! (or those that had a "good enough" pre-align score)
         // This populates the traceback matrices too for suboptimal alignments.
-        let original_alignment = self.multi_contig_align(query, contigs_to_align.as_ref());
+        let original_alignment = self.multi_contig_align(&query, contigs_to_align.as_ref());
 
         // Get all alignments if we want to keep sub-optimal alignments, or just process this one
         let mut alignments = Vec::new();
@@ -262,7 +267,7 @@ impl Aligners<'_, MatchParams> {
             for alignment in new_alignments {
                 // remove leading/trailing clipping, needed to for origin re-alignment
                 let alignment = self.remove_clipping(alignment);
-                let alignment = self.realign_origin(query, alignment, opts.circular_slop, false);
+                let alignment = self.realign_origin(&query, alignment, opts.circular_slop, false);
                 alignments.push(alignment);
             }
 
@@ -281,7 +286,7 @@ impl Aligners<'_, MatchParams> {
         } else {
             // Re-align around the origin if the contig is circular or we force circular
             let alignment =
-                self.realign_origin(query, original_alignment, opts.circular_slop, false);
+                self.realign_origin(&query, original_alignment, opts.circular_slop, false);
             alignments.push(alignment);
         }
 
@@ -809,4 +814,37 @@ pub fn to_records<F: MatchFunc>(
     }
 
     Ok(records)
+}
+
+#[cfg(test)]
+pub mod tests {
+    use crate::{
+        commands::align::Align,
+        util::target_seq::{self, TargetHash},
+    };
+    use clap::Parser;
+    use seq_io::fastq::OwnedRecord as FastqOwnedRecord;
+
+    #[test]
+    fn test_case_insensitive() {
+        // HACK: creating an `Aligners` should not require parsing command line arguments
+        let opts = Align::parse_from(["align", "-f", ".", "-r", "."]);
+        let seq = b"ACGGACAGATCGAATACGACAGGAC".to_vec();
+        let target_seqs = [target_seq::TargetSeq::new("test-contig", &seq, false)];
+        let mut aligners = super::build_aligners(&opts, &target_seqs);
+        let record = FastqOwnedRecord {
+            head: b"test-record".to_vec(),
+            seq: seq.clone(),
+            qual: vec![b'#'; seq.len()],
+        };
+        let k = 7;
+        let target_hashes: Vec<TargetHash> = target_seqs
+            .iter()
+            .map(|target_seq| target_seq.build_target_hash(k))
+            .collect();
+        let (alignment, _) = aligners.align(&record, &target_seqs, &target_hashes, &opts);
+        assert_eq!(alignment.len(), 1);
+        assert_eq!(alignment[0].length, seq.len());
+        assert_eq!(alignment[0].cigar(), format!("{}=", seq.len()));
+    }
 }
