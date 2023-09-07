@@ -700,7 +700,7 @@ pub mod tests {
         // make these into test cases?
 
         // jump to the same contig and strand is prioritized
-        for mut contig in &mut aligner.contigs {
+        for contig in &mut aligner.contigs {
             contig.aligner.scoring = contig.aligner.scoring.set_jump_scores(-1, -2, -2);
         }
         let alignment = aligner.custom(&y1);
@@ -708,7 +708,7 @@ pub mod tests {
 
         // jump to the same contig and opposite strand is prioritized
         // starts in the middle of x2, then jumps back to the start of x1
-        for mut contig in &mut aligner.contigs {
+        for contig in &mut aligner.contigs {
             contig.aligner.scoring = contig.aligner.scoring.set_jump_scores(-2, -1, -2);
         }
         let alignment = aligner.custom(&y1);
@@ -716,14 +716,14 @@ pub mod tests {
 
         // jump to a different contig is prioritized
         // starts by aligning to x3 fully, then jumping to x1 and alinging to the last 5bp of x1
-        for mut contig in &mut aligner.contigs {
+        for contig in &mut aligner.contigs {
             contig.aligner.scoring = contig.aligner.scoring.set_jump_scores(-2, -2, -1);
         }
         let alignment = aligner.custom(&y1);
         assert_alignment(&alignment, 0, 15, 0, 10, 10 - 1, 2, "5=2c5J5=", 10);
 
         // jump to the same contig and strand is prioritized when the scores are the same
-        for mut contig in &mut aligner.contigs {
+        for contig in &mut aligner.contigs {
             contig.aligner.scoring = contig.aligner.scoring.set_jump_scores(-1, -1, -1);
         }
         let alignment = aligner.custom(&y1);
@@ -731,7 +731,7 @@ pub mod tests {
 
         // jump to the same contig and opposite is prioritized when the scores are the same
         // starts in the middle of x2, then jumps back to the start of x1
-        for mut contig in &mut aligner.contigs {
+        for contig in &mut aligner.contigs {
             contig.aligner.scoring = contig.aligner.scoring.set_jump_scores(-2, -1, -1);
         }
         let alignment = aligner.custom(&y1);

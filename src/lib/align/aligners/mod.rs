@@ -446,7 +446,7 @@ impl Aligners<'_, MatchParams> {
             let second_query_and_yend = (second_query, yend);
 
             // Align!
-            for (query, yend) in vec![first_query_and_yend, second_query_and_yend] {
+            for (query, yend) in [first_query_and_yend, second_query_and_yend] {
                 best_alignment = self
                     .realign_and_split_at_y(
                         &query,
@@ -487,7 +487,7 @@ impl Aligners<'_, MatchParams> {
             let second_query_and_ystart = (second_query, ystart);
 
             // Align!
-            for (query, ystart) in vec![first_query_and_ystart, second_query_and_ystart] {
+            for (query, ystart) in [first_query_and_ystart, second_query_and_ystart] {
                 best_alignment = self
                     .realign_and_split_at_y(
                         &query,
