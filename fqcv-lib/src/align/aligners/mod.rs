@@ -39,6 +39,7 @@ use bio::alignment::{
 };
 use bit_set::BitSet;
 use constants::DEFAULT_ALIGNER_CAPACITY;
+use itertools::Itertools;
 use noodles::{
     core::Position,
     sam::{
@@ -236,7 +237,11 @@ impl Aligners<'_, MatchParams> {
         target_seqs: &[TargetSeq],
         target_hashes: &[TargetHash],
     ) -> (Vec<Alignment>, Option<i32>) {
-        let query = record.seq();
+        let query = record
+            .seq()
+            .iter()
+            .map(u8::to_ascii_uppercase)
+            .collect_vec();
         let mut contig_idx_to_prealign_score: IndexMap<i32> =
             IndexMap::new(self.multi_contig.len());
         if self.opts.pre_align {
@@ -245,7 +250,7 @@ impl Aligners<'_, MatchParams> {
             for (index, target_seq) in target_seqs.iter().enumerate() {
                 let target_hash = &target_hashes[index];
                 let (score_fwd, score_revcomp) = prealign_local_banded(
-                    query,
+                    &query,
                     target_seq,
                     target_hash,
                     &mut self.banded,
@@ -292,7 +297,7 @@ impl Aligners<'_, MatchParams> {
 
         // Align to all the contigs! (or those that had a "good enough" pre-align score)
         // This populates the traceback matrices too for suboptimal alignments.
-        let original_alignment = self.multi_contig_align(query, contigs_to_align.as_ref());
+        let original_alignment = self.multi_contig_align(&query, contigs_to_align.as_ref());
 
         // Get all alignments if we want to keep sub-optimal alignments, or just process this one
         let mut alignments = Vec::new();
@@ -307,7 +312,7 @@ impl Aligners<'_, MatchParams> {
                 // remove leading/trailing clipping, needed to for origin re-alignment
                 let alignment = self.remove_clipping(alignment);
                 let alignment =
-                    self.realign_origin(query, alignment, self.opts.circular_slop, false);
+                    self.realign_origin(&query, alignment, self.opts.circular_slop, false);
                 alignments.push(alignment);
             }
 
@@ -326,7 +331,7 @@ impl Aligners<'_, MatchParams> {
         } else {
             // Re-align around the origin if the contig is circular or we force circular
             let alignment =
-                self.realign_origin(query, original_alignment, self.opts.circular_slop, false);
+                self.realign_origin(&query, original_alignment, self.opts.circular_slop, false);
             alignments.push(alignment);
         }
 
@@ -491,7 +496,7 @@ impl Aligners<'_, MatchParams> {
             let second_query_and_yend = (second_query, yend);
 
             // Align!
-            for (query, yend) in vec![first_query_and_yend, second_query_and_yend] {
+            for (query, yend) in [first_query_and_yend, second_query_and_yend] {
                 best_alignment = self
                     .realign_and_split_at_y(
                         &query,
@@ -532,7 +537,7 @@ impl Aligners<'_, MatchParams> {
             let second_query_and_ystart = (second_query, ystart);
 
             // Align!
-            for (query, ystart) in vec![first_query_and_ystart, second_query_and_ystart] {
+            for (query, ystart) in [first_query_and_ystart, second_query_and_ystart] {
                 best_alignment = self
                     .realign_and_split_at_y(
                         &query,
@@ -863,5 +868,33 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
         }
 
         Ok(records)
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use super::Builder;
+    use crate::util::target_seq::{self, TargetHash};
+    use seq_io::fastq::OwnedRecord as FastqOwnedRecord;
+
+    #[test]
+    fn test_case_insensitive() {
+        let seq = b"ACGGACAGATCGAATACGACAGGAC".to_vec();
+        let target_seqs = [target_seq::TargetSeq::new("test-contig", &seq, false)];
+        let mut aligners = Builder::default().build_aligners(&target_seqs);
+        let record = FastqOwnedRecord {
+            head: b"test-record".to_vec(),
+            seq: seq.clone(),
+            qual: vec![b'#'; seq.len()],
+        };
+        let k = 7;
+        let target_hashes: Vec<TargetHash> = target_seqs
+            .iter()
+            .map(|target_seq| target_seq.build_target_hash(k))
+            .collect();
+        let (alignment, _) = aligners.align(&record, &target_seqs, &target_hashes);
+        assert_eq!(alignment.len(), 1);
+        assert_eq!(alignment[0].length, seq.len());
+        assert_eq!(alignment[0].cigar(), format!("{}=", seq.len()));
     }
 }
