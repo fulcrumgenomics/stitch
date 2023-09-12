@@ -42,6 +42,10 @@ impl TargetSeq {
         self.fwd.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.fwd.len() == 0
+    }
+
     /// Creates a new `TargetHash` with the given k-mer size.
     pub fn build_target_hash(&self, k: usize) -> TargetHash {
         TargetHash {

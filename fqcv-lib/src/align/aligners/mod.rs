@@ -158,7 +158,7 @@ impl Options {
             jump_score_same_contig_and_strand,
             jump_score_same_contig_opposite_strand,
             jump_score_inter_contig,
-            match_params.clone(),
+            match_params,
         )
         .set_xclip_prefix(xclip_prefix)
         .set_xclip_suffix(xclip_suffix)
@@ -189,7 +189,7 @@ impl Builder {
                 true,
                 &target_seq.fwd,
                 opts.circular,
-                multi_contig_scoring.clone(),
+                multi_contig_scoring,
             );
         }
         if opts.double_strand {
@@ -199,7 +199,7 @@ impl Builder {
                     false,
                     &target_seq.revcomp,
                     opts.circular,
-                    multi_contig_scoring.clone(),
+                    multi_contig_scoring,
                 );
             }
         }
