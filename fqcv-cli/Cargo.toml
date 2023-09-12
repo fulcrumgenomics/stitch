@@ -1,0 +1,24 @@
+[package]
+name = "fqcv"
+description = "FQCV is an aligner for long reads against one or more reference/expected vector/plasmid/construct(s)."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "fqcv"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { version = "4.2.7", features = ["derive", "string"] }
+enum_dispatch = "0.3.12"
+env_logger = "0.10.0"
+flume.workspace = true
+fqcv-lib = { version = "0.1.0", path = "../fqcv-lib" }
+itertools.workspace = true
+log = "0.4.17"
+noodles.workspace = true
+proglog = { version = "0.3.0", features = ["pretty_counts"] }

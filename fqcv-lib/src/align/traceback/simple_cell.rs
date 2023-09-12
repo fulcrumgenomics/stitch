@@ -1,9 +1,7 @@
 use crate::align::traceback::TB_MAX;
 
-use super::SValue;
-use super::TracebackCell;
-use serde::Deserialize;
-use serde::Serialize;
+use super::{SValue, TracebackCell};
+use serde::{Deserialize, Serialize};
 
 /// Packed representation of one cell of a Smith-Waterman traceback matrix.  Does not store
 /// alignment length for each matrix value, and so cannot be used to break ties to prefer longer

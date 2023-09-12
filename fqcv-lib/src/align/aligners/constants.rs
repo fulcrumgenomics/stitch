@@ -1,4 +1,5 @@
-use clap::ValueEnum;
+use anyhow::{anyhow, Error};
+use std::{fmt::Display, str::FromStr};
 
 /// Value to use as a 'negative infinity' score. Should be close to `i32::MIN`,
 /// but avoid underflow when used with reasonable scoring parameters or even
@@ -93,7 +94,7 @@ impl AlignmentOperation {
 ///
 /// The default alignment mode is Global.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Default, Debug, PartialEq, Eq, Copy, Clone, ValueEnum)]
+#[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
 pub enum AlignmentMode {
     /// Aligns a sub-sequence of the read versus a sub-sequence of the reference
     #[default]
@@ -105,4 +106,33 @@ pub enum AlignmentMode {
     /// Aligns the full read versus the full reference.
     Global,
     Custom,
+}
+
+impl Display for AlignmentMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local => write!(f, "local"),
+            Self::QueryLocal => write!(f, "query-local"),
+            Self::TargetLocal => write!(f, "target-local"),
+            Self::Global => write!(f, "global"),
+            Self::Custom => write!(f, "custom"),
+        }
+    }
+}
+
+impl FromStr for AlignmentMode {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "local" => Ok(AlignmentMode::Local),
+            "query-local" | "query_local" | "querylocal" | "query" => Ok(AlignmentMode::QueryLocal),
+            "target-local" | "target_local" | "targetlocal" | "target" => {
+                Ok(AlignmentMode::TargetLocal)
+            }
+            "global" => Ok(AlignmentMode::Global),
+            "custom" => Ok(AlignmentMode::Custom),
+            _ => Err(anyhow!("Invalid alignment mode: {}", s)),
+        }
+    }
 }

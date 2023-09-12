@@ -13,6 +13,5 @@
     clippy::cast_sign_loss
 )]
 
-mod align;
-pub mod commands;
+pub mod align;
 pub mod util;
