@@ -77,8 +77,11 @@ pub struct Options {
     gap_extend: i32,
     #[builder(default = "-10")]
     default_jump_score: i32,
+    #[builder(default)]
     jump_score_same_contig_and_strand: Option<i32>,
+    #[builder(default)]
     jump_score_same_contig_opposite_strand: Option<i32>,
+    #[builder(default)]
     jump_score_inter_contig: Option<i32>,
     #[builder(default = "12")]
     kmer_size: usize,
