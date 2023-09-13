@@ -452,3 +452,16 @@ impl Command for Align {
         Align::execute(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Align;
+
+    /// Check that the argument parser works
+    #[test]
+    fn test_parse() {
+        Align::parse_from(["align", "-f", ".", "-r", "."]);
+    }
+}
