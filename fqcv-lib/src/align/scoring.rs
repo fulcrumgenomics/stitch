@@ -1,13 +1,12 @@
+use crate::align::aligners::constants::MIN_SCORE;
 use bio::alignment::pairwise::MatchFunc;
 use serde::Serialize;
-
-use crate::align::aligners::constants::MIN_SCORE;
 
 /// Details of scoring are encapsulated in this structure.
 ///
 /// An [affine gap score model](https://en.wikipedia.org/wiki/Gap_penalty#Affine)
 /// is used so that the gap score for a length `k` is:
-/// `GapScore(k) = gap_open + gap_extend * k`
+/// `GapScore(k) = gap_open + gap_extend * k
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
 pub struct Scoring<F: MatchFunc> {
     pub gap_open: i32,
@@ -134,7 +133,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.yclip_suffix == MIN_SCORE);
     /// ```
     #[allow(dead_code)]
-    pub fn xclip(mut self, penalty: i32) -> Self {
+    pub fn set_xclip(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.xclip_prefix = penalty;
         self.xclip_suffix = penalty;
@@ -157,7 +156,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.yclip_suffix == MIN_SCORE);
     /// ```
     #[allow(dead_code)]
-    pub fn xclip_prefix(mut self, penalty: i32) -> Self {
+    pub fn set_xclip_prefix(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.xclip_prefix = penalty;
         self
@@ -178,7 +177,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.yclip_suffix == MIN_SCORE);
     /// ```
     #[allow(dead_code)]
-    pub fn xclip_suffix(mut self, penalty: i32) -> Self {
+    pub fn set_xclip_suffix(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.xclip_suffix = penalty;
         self
@@ -199,7 +198,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.yclip_suffix == -5);
     /// ```
     #[allow(dead_code)]
-    pub fn yclip(mut self, penalty: i32) -> Self {
+    pub fn set_yclip(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.yclip_prefix = penalty;
         self.yclip_suffix = penalty;
@@ -221,7 +220,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.yclip_suffix == MIN_SCORE);
     /// ```
     #[allow(dead_code)]
-    pub fn yclip_prefix(mut self, penalty: i32) -> Self {
+    pub fn set_yclip_prefix(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.yclip_prefix = penalty;
         self
@@ -242,7 +241,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// assert!(scoring.yclip_suffix == -5);
     /// ```
     #[allow(dead_code)]
-    pub fn yclip_suffix(mut self, penalty: i32) -> Self {
+    pub fn set_yclip_suffix(mut self, penalty: i32) -> Self {
         assert!(penalty <= 0, "Clipping penalty can't be positive");
         self.yclip_suffix = penalty;
         self

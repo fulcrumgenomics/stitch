@@ -1,13 +1,11 @@
-use clap::Parser;
-use env_logger::Env;
-use fqcv_lib::util::version::built_info;
-
 pub mod commands;
 
 use anyhow::Result;
-use commands::command::Command;
+use clap::Parser;
+use commands::{align::Align, command::Command};
 use enum_dispatch::enum_dispatch;
-use fqcv_lib::commands::align::Align;
+use env_logger::Env;
+use fqcv_lib::util::version::built_info;
 
 // #[global_allocator]
 // static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

@@ -1,11 +1,15 @@
-use crate::align::aligners::constants::DEFAULT_ALIGNER_CAPACITY;
-use crate::align::aligners::single_contig_aligner::SingleContigAligner;
-use crate::align::alignment::Alignment;
-use crate::align::scoring::Scoring;
-use crate::align::traceback::{traceback, traceback_all, traceback_from};
-use crate::util::index_map::IndexMap;
-use bio::alignment::pairwise::MatchFunc;
-use bio::utils::TextSlice;
+use crate::{
+    align::{
+        aligners::{
+            constants::DEFAULT_ALIGNER_CAPACITY, single_contig_aligner::SingleContigAligner,
+        },
+        alignment::Alignment,
+        scoring::Scoring,
+        traceback::{traceback, traceback_all, traceback_from},
+    },
+    util::index_map::IndexMap,
+};
+use bio::{alignment::pairwise::MatchFunc, utils::TextSlice};
 use bit_set::BitSet;
 use itertools::Itertools;
 
@@ -437,12 +441,9 @@ pub mod tests {
         jump_score: i32,
     ) -> Scoring<MatchParams> {
         let match_fn = MatchParams::new(1, mismatch_score);
-        let mut scoring = Scoring::with_jump_score(gap_open, gap_extend, jump_score, match_fn);
-        scoring.xclip_prefix = MIN_SCORE;
-        scoring.xclip_suffix = MIN_SCORE;
-        scoring.yclip_prefix = MIN_SCORE;
-        scoring.yclip_suffix = MIN_SCORE;
-        scoring
+        Scoring::with_jump_score(gap_open, gap_extend, jump_score, match_fn)
+            .set_xclip(MIN_SCORE)
+            .set_yclip(MIN_SCORE)
     }
 
     fn scoring_global() -> Scoring<MatchParams> {
@@ -456,12 +457,9 @@ pub mod tests {
         jump_score: i32,
     ) -> Scoring<MatchParams> {
         let match_fn = MatchParams::new(1, mismatch_score);
-        let mut scoring = Scoring::with_jump_score(gap_open, gap_extend, jump_score, match_fn);
-        scoring.xclip_prefix = 0;
-        scoring.xclip_suffix = 0;
-        scoring.yclip_prefix = 0;
-        scoring.yclip_suffix = 0;
-        scoring
+        Scoring::with_jump_score(gap_open, gap_extend, jump_score, match_fn)
+            .set_xclip(0)
+            .set_yclip(0)
     }
 
     /// Identical sequences, all matches

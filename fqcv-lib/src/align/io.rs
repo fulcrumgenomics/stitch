@@ -1,23 +1,18 @@
+use super::alignment::Alignment;
+use crate::util::io::{is_fastq_path, is_gzip_path};
 use anyhow::{Context, Result};
 use flate2::bufread::MultiGzDecoder;
 use flume::{bounded, Receiver, Sender};
 use seq_io::fastq::{OwnedRecord as FastqOwnedRecord, Reader as FastqReader};
-use std::path::PathBuf;
-use std::thread::JoinHandle;
 use std::{
     fs::File,
     io::{BufReader, Read},
+    path::PathBuf,
+    thread::JoinHandle,
 };
-
-use crate::util::io::{is_fastq_path, is_gzip_path};
-
-use super::alignment::Alignment;
 
 /// 128 KB default buffer size, same as pigz.
 pub const GZ_BUFSIZE: usize = 64 * (1 << 10) * 2;
-
-/// The buffer size for reading FASTAs
-pub const BUFFER_SIZE: usize = 1024 * 1024;
 
 /// The number of FASTQ records to includ per chunk, scaled but the # of CPUS.
 pub const RECORDS_PER_CHUNK_PER_THREAD: usize = 10;

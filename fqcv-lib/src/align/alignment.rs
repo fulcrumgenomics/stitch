@@ -1,9 +1,9 @@
 use std::fmt;
 
 use super::aligners::constants::{AlignmentMode, AlignmentOperation};
-use crate::align::aligners::constants::AlignmentMode::{Global, QueryLocal, TargetLocal};
-use crate::align::aligners::constants::AlignmentOperation::{
-    Del, Ins, Match, Subst, Xclip, Xjump, Yclip, Yjump,
+use crate::align::aligners::constants::{
+    AlignmentMode::{Global, QueryLocal, TargetLocal},
+    AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xjump, Yclip, Yjump},
 };
 
 /// We consider alignment between two sequences x and  y. x is the query or read sequence
@@ -385,10 +385,10 @@ impl fmt::Display for Alignment {
 pub mod tests {
     use rstest::rstest;
 
-    use crate::align::aligners::constants::AlignmentMode;
-    use crate::align::aligners::constants::AlignmentMode::Local;
-    use crate::align::aligners::constants::AlignmentOperation::{
-        Del, Ins, Match, Subst, Xjump, Yclip, Yjump,
+    use crate::align::aligners::constants::{
+        AlignmentMode,
+        AlignmentMode::Local,
+        AlignmentOperation::{Del, Ins, Match, Subst, Xjump, Yclip, Yjump},
     };
 
     use super::Alignment;
