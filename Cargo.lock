@@ -523,6 +523,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "835a3dc7d1ec9e75e2b5fb4ba75396837112d2060b03f7d43bc1897c7f7211da"
 
 [[package]]
+name = "fg-stitch"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "enum_dispatch",
+ "env_logger",
+ "fg-stitch-lib",
+ "flume",
+ "itertools",
+ "log",
+ "noodles",
+ "proglog",
+]
+
+[[package]]
+name = "fg-stitch-lib"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bio",
+ "bit-set",
+ "built",
+ "cfg-if",
+ "derive-getters",
+ "derive_builder",
+ "fgoxide",
+ "flate2",
+ "flume",
+ "itertools",
+ "lazy_static",
+ "noodles",
+ "num_cpus",
+ "rstest",
+ "seq_io",
+ "serde",
+]
+
+[[package]]
 name = "fgoxide"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -576,45 +615,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a9c384f161156f5260c24a097c56119f9be8c798586aecc13afbcbe7b7e26bf8"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "fqcv"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "enum_dispatch",
- "env_logger",
- "flume",
- "fqcv-lib",
- "itertools",
- "log",
- "noodles",
- "proglog",
-]
-
-[[package]]
-name = "fqcv-lib"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bio",
- "bit-set",
- "built",
- "cfg-if",
- "derive-getters",
- "derive_builder",
- "fgoxide",
- "flate2",
- "flume",
- "itertools",
- "lazy_static",
- "noodles",
- "num_cpus",
- "rstest",
- "seq_io",
- "serde",
 ]
 
 [[package]]

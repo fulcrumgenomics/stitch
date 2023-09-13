@@ -1,36 +1,37 @@
-# fqcv
+# stitch
 
 <p align="center">
-  <a href="https://github.com/fulcrumgenomics/fqcv/actions?query=workflow%3ACheck"><img src="https://github.com/fulcrumgenomics/fqcv/actions/workflows/build_and_test.yml/badge.svg" alt="Build Status"></a>
+  <a href="https://github.com/fulcrumgenomics/stitch/actions?query=workflow%3ACheck"><img src="https://github.com/fulcrumgenomics/stitch/actions/workflows/build_and_test.yml/badge.svg" alt="Build Status"></a>
   <br>
 </p>
 
 Alignment for vector quality control
 
 <!---toc start-->
-* [fqcv align](#fqcv-align)
-  * [Optional Pre-alignment](#optional-pre-alignment)
-  * [Alignment Scoring](#alignment-scoring)
-  * [Alignment mode](#alignment-mode)
-  * [Circular contigs](#circular-contigs)
-  * [Additional Output Options](#additional-output-options)
-* [Installing](#installing)
-  * [Installing with cargo](#installing-with-cargo)
-  * [Building From Source](#building-from-source)
-* [Developing](#developing)
-* [Releasing a New Version](#releasing-a-new-version)
-  * [Pre-requisites](#pre-requisites)
-  * [Prior to Any Release](#prior-to-any-release)
-  * [Semantic Versioning](#semantic-versioning)
-  * [Major Release](#major-release)
-  * [Minor and Patch Release](#minor-and-patch-release)
-  * [Release Candidate](#release-candidate)
+- [stitch](#stitch)
+  - [stitch align](#stitch-align)
+    - [Optional Pre-alignment](#optional-pre-alignment)
+    - [Alignment Scoring](#alignment-scoring)
+    - [Alignment mode](#alignment-mode)
+    - [Circular contigs](#circular-contigs)
+    - [Additional Output Options](#additional-output-options)
+  - [Installing](#installing)
+    - [Installing with `cargo`](#installing-with-cargo)
+    - [Building From Source](#building-from-source)
+  - [Developing](#developing)
+  - [Releasing a New Version](#releasing-a-new-version)
+    - [Pre-requisites](#pre-requisites)
+    - [Prior to Any Release](#prior-to-any-release)
+    - [Semantic Versioning](#semantic-versioning)
+    - [Major Release](#major-release)
+    - [Minor and Patch Release](#minor-and-patch-release)
+    - [Release Candidate](#release-candidate)
   
 <!---toc end-->
 
-## fqcv align
+## stitch align
 
-Perfoms alignment of a long reads against one or more reference/expected vector/plasmid/construct(s).
+Perfoms alignment of long reads against one or more reference/expected vector/plasmid/construct(s).
 
 The alignment extends the traditional alignment algorithms by introducing a "jump" move/operator, 
 whereby the alignment is able to jump anywhere in the reference sequence for a fixed cost.  This 
@@ -104,10 +105,10 @@ Which (On Mac OS and Linux) can be done with the command:
 curl https://sh.rustup.rs -sSf | sh
 ```
 
-Then, to install `fqcv` run:
+Then, to install `stitch` run:
 
 ```console
-cargo install fqcv
+cargo install fg-stitch
 ```
 
 ### Building From Source
@@ -115,7 +116,7 @@ cargo install fqcv
 First, clone the git repo:
 
 ```console
-git clone https://github.com/fulcrumgenomics/fqcv.git
+git clone https://github.com/fulcrumgenomics/stitch.git
 ```
 
 Secondly, if you do not already have rust development tools installed, install via [rustup](https://rustup.rs/):
@@ -127,15 +128,15 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 Then build the toolkit in release mode:
 
 ```console
-cd fqcv
+cd stitch
 cargo build --release
-./target/release/fqcv --help
+./target/release/stitch --help
 ```
 
 ## Developing
 
-fqcv is developed in Rust and follows the conventions of using `rustfmt` and `clippy` to ensure both code quality and standardized formatting.
-When working on fqcv, before pushing any commits, please first run `./ci/check.sh` and resolve any issues that are reported.
+`stitch` is developed in Rust and follows the conventions of using `rustfmt` and `clippy` to ensure both code quality and standardized formatting.
+When working on `stitch`, before pushing any commits, please first run `./ci/check.sh` and resolve any issues that are reported.
 
 ## Releasing a New Version
 
@@ -203,4 +204,4 @@ If you would like to tag the release candidate on github, remove `--no-tag` to c
 
 [cargo-release-link]:      https://github.com/crate-ci/cargo-release
 [cargo-release-docs-link]: https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
-[new-release-link]:        https://github.com/fulcrumgenomics/fqcv/releases/new
+[new-release-link]:        https://github.com/fulcrumgenomics/stitch/releases/new

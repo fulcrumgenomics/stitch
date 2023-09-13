@@ -5,19 +5,6 @@ use clap::{
     Parser,
 };
 use flume::unbounded;
-use fqcv_lib::{
-    align::{
-        io::{
-            FastqGroupingIterator, FastqThreadReader, OutputMessage, OutputResult,
-            READER_CHANNEL_NUM_CHUNKS,
-        },
-        AlignmentMode, Builder, PrimaryPickingStrategy,
-    },
-    util::{
-        target_seq,
-        version::{built_info, built_info::VERSION},
-    },
-};
 use itertools::{self, Itertools};
 use log::info;
 use noodles::{
@@ -36,6 +23,19 @@ use proglog::{CountFormatterKind, ProgLogBuilder};
 use std::{
     env, io, io::Write, num::NonZeroUsize, path::PathBuf, sync::Arc, thread::JoinHandle,
     time::Duration,
+};
+use stitch::{
+    align::{
+        io::{
+            FastqGroupingIterator, FastqThreadReader, OutputMessage, OutputResult,
+            READER_CHANNEL_NUM_CHUNKS,
+        },
+        AlignmentMode, Builder, PrimaryPickingStrategy,
+    },
+    util::{
+        target_seq,
+        version::{built_info, built_info::VERSION},
+    },
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -277,7 +277,7 @@ impl Align {
         info!("Reading reads FASTQ from {}", self.reads_fastq.display());
         // ensure!(self. > 1, "Must specify at least two threads");
         let progress_logger = ProgLogBuilder::new()
-            .name("fqcv-progress")
+            .name("stitch-progress")
             .noun("reads")
             .verb("Processed")
             .unit(
@@ -388,9 +388,9 @@ impl Align {
         let mut writer = BamWriter::from(encoder);
         let header = {
             let mut builder = SamHeader::builder().set_header(Map::default()).add_program(
-                "fqcv",
+                "stitch",
                 Map::<Program>::builder()
-                    .set_name("fqcv")
+                    .set_name("stitch")
                     .set_version(VERSION.clone())
                     .set_command_line(command_line)
                     .build()?,
