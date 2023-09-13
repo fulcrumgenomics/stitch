@@ -1,6 +1,6 @@
 [package]
-name = "fqcv-lib"
-description = "FQCV aligner implementation and supporting utilities."
+name = "fg-stitch-lib"
+description = "Stitch aligner implementation and supporting utilities."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true

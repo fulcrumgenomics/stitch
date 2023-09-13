@@ -1,6 +1,6 @@
 [package]
-name = "fqcv"
-description = "FQCV is an aligner for long reads against one or more reference/expected vector/plasmid/construct(s)."
+name = "fg-stitch"
+description = "Stitch is an aligner for long reads against one or more reference/expected vector/plasmid/construct(s)."
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "fqcv"
+name = "stitch"
 path = "src/main.rs"
 
 [dependencies]
@@ -17,7 +17,7 @@ clap = { version = "4.2.7", features = ["derive", "string"] }
 enum_dispatch = "0.3.12"
 env_logger = "0.10.0"
 flume.workspace = true
-fqcv-lib = { version = "0.1.0", path = "../fqcv-lib" }
+stitch = { version = "0.1.0", path = "../fg-stitch-lib", package = "fg-stitch-lib" }
 itertools.workspace = true
 log = "0.4.17"
 noodles.workspace = true

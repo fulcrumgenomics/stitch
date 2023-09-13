@@ -1,11 +1,12 @@
 [workspace]
-members = ["fqcv-lib", "fqcv-cli"]
+members = ["fg-stitch-lib", "fg-stitch-cli"]
+resolver = "2"
 
 [workspace.package]
 authors = ["Fulcrum Genomics LLC"]
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/fulcrumgenomics/fqcv"
+repository = "https://github.com/fulcrumgenomics/fg-stitch"
 version = "0.1.0"
 
 [workspace.dependencies]

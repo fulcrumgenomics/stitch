@@ -1,11 +1,11 @@
-pub mod commands;
+mod commands;
 
 use anyhow::Result;
 use clap::Parser;
 use commands::{align::Align, command::Command};
 use enum_dispatch::enum_dispatch;
 use env_logger::Env;
-use fqcv_lib::util::version::built_info;
+use stitch::util::version::built_info;
 
 // #[global_allocator]
 // static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
