@@ -1,6 +1,9 @@
 use super::command::{Command, ValueEnum};
 use anyhow::Result;
-use clap::{builder::PossibleValuesParser, Parser};
+use clap::{
+    builder::{PossibleValuesParser, TypedValueParser as _},
+    Parser,
+};
 use flume::unbounded;
 use fqcv_lib::{
     align::{
@@ -209,7 +212,8 @@ pub struct Align {
     #[clap(
         long,
         short = 'm',
-        value_parser = PossibleValuesParser::new(AlignmentMode::possible_values()),
+        value_parser = PossibleValuesParser::new(AlignmentMode::possible_values())
+            .map(|s| s.parse::<AlignmentMode>().unwrap()),
         default_value_t = AlignmentMode::Local,
         ignore_case = true,
         display_order = 17,
@@ -223,7 +227,8 @@ pub struct Align {
     #[clap(
         long,
         short = 'P',
-        value_parser = PossibleValuesParser::new(PrimaryPickingStrategy::possible_values()),
+        value_parser = PossibleValuesParser::new(PrimaryPickingStrategy::possible_values())
+            .map(|s| s.parse::<PrimaryPickingStrategy>().unwrap()),
         default_value_t = PrimaryPickingStrategy::QueryLength,
         ignore_case = true,
         display_order = 18,
@@ -445,5 +450,18 @@ impl Align {
 impl Command for Align {
     fn execute(&self) -> anyhow::Result<()> {
         Align::execute(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Align;
+
+    /// Check that the argument parser works
+    #[test]
+    fn test_parse() {
+        Align::parse_from(["align", "-f", ".", "-r", "."]);
     }
 }
