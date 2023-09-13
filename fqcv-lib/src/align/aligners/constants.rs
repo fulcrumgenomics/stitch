@@ -124,7 +124,7 @@ impl FromStr for AlignmentMode {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
+        match s.to_ascii_lowercase().as_str() {
             "local" => Ok(AlignmentMode::Local),
             "query-local" | "query_local" | "querylocal" | "query" => Ok(AlignmentMode::QueryLocal),
             "target-local" | "target_local" | "targetlocal" | "target" => {

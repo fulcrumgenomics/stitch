@@ -46,7 +46,6 @@ impl ValueEnum for AlignmentMode {
             Self::QueryLocal,
             Self::TargetLocal,
             Self::Global,
-            Self::Custom,
         ]
     }
 }
@@ -212,19 +211,21 @@ pub struct Align {
         short = 'm',
         value_parser = PossibleValuesParser::new(AlignmentMode::possible_values()),
         default_value_t = AlignmentMode::Local,
+        ignore_case = true,
         display_order = 17,
         verbatim_doc_comment
     )]
     mode: AlignmentMode,
 
     /// Determines how to pick the primary alignment:
-    /// - query-length: the longest aligned query length, then by `score`
-    /// - score: the best scoring alignment, then by `query-length`
+    /// - QueryLength: the longest aligned query length, then by `Score`
+    /// - Score: the best scoring alignment, then by `QueryLength`
     #[clap(
         long,
         short = 'P',
         value_parser = PossibleValuesParser::new(PrimaryPickingStrategy::possible_values()),
         default_value_t = PrimaryPickingStrategy::QueryLength,
+        ignore_case = true,
         display_order = 18,
         verbatim_doc_comment
     )]

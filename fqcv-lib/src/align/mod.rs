@@ -31,7 +31,7 @@ impl FromStr for PrimaryPickingStrategy {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
+        match s.to_ascii_lowercase().as_str() {
             "query-length" | "query_length" | "querylength" | "length" => {
                 Ok(PrimaryPickingStrategy::QueryLength)
             }
