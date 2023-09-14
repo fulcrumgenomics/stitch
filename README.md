@@ -23,31 +23,22 @@
 
 ## Disclaimer
 
-** Under active development - Alpha - Please contact us if you're considering using this software **
-
-Many features have not been tested, implemented, or considered. 
-Please submit an issue (or better yet, submit a pull request), or contact [Fulcrum Genomics](www.fulcrumgenomics.com)
+**Stitch is under active development, and is currently alpha quality software for research purposes only.** Many features have not been tested, implemented, or considered. Please contact [Fulcrum Genomics](www.fulcrumgenomics.com)if you're considering using this software. Please submit an [issue](https://github.com/fulcrumgenomics/stitch/issues) - or better yet, a [pull request](https://github.com/fulcrumgenomics/stitch/pulls) - if you discover a bug or identify a missing feature.
 
 ## Overview
 
-Toolkit for long read chimeric alignment, non-linear alignments where the alignment may jump within
-and/or between contigs.
+Stitch is a toolkit for analysis of chimeric reads in sequencing data (especially long reads like ONT and PacBio). Chimeric sequencing reads derive from template molecules that contain disjoint regions of the linear (or circular) reference genome, e.g., due to recombination, double-strand break repair, or gene editing. Chimeric reads may span large inter- or intra-contig distances, and thus present a challenge to traditional sequence aligners.
 
 Potential use cases include, but are not limited to:
 
-1. Aligning vectors/plasmids/viruses (assemblies, long reads, etc) to a database of constructs to determine the component structure.
-2. Determining the structure of complex structural variants (e.g. chromthrypsis, cccDNA, etc)
-3. Per-read evidence for somatic fusions and structural variants
+1. Aligning vectors/plasmids/viruses (assemblies, long reads, etc) to a database of constructs to determine the component structure
+2. Determining the structure of complex structural variants (e.g., chromthrypsis, cccDNA, etc.)
+3. Per-read evidence for somatic fusions and other structural variants
 
 ## Installing
 
 ### Installing with `cargo`
 To install with cargo you must first [install rust](https://doc.rust-lang.org/cargo/getting-started/installation.html).
-Which (On Mac OS and Linux) can be done with the command:
-
-```console
-curl https://sh.rustup.rs -sSf | sh
-```
 
 Then, to install `stitch` run:
 
@@ -63,11 +54,7 @@ First, clone the git repo:
 git clone https://github.com/fulcrumgenomics/stitch.git
 ```
 
-Secondly, if you do not already have rust development tools installed, install via [rustup](https://rustup.rs/):
-
-```console
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
+Second, [install rust](https://doc.rust-lang.org/cargo/getting-started/installation.html) if you have not already.
 
 Then build the toolkit in release mode:
 
@@ -77,11 +64,13 @@ cargo build --release
 ./target/release/stitch --help
 ```
 
-## stitch align
+## Usage
 
-`stitch` was originally developed for alinging long reads from vector/plasmids/viruses to a large number of
-constructs to determine each read's component structure.  The description of `stitch` align is described
-in the context of this application.
+### `stitch align`
+
+Aligns reads of any length (in FASTQ format) against an assembly (in FASTA format).
+
+Note that `stitch` was originally developed for the purpose of aligning reads from vectors/plasmids/viruses to a large number of relatively short constructs to determine each read's component structure. The assembly is indexed  at runtime and the index is held in memory, so performance and memory usage likely will not scale well to large genomes.
 
 The alignment extends the traditional alignment algorithms by introducing a "jump" move/operator, 
 whereby the alignment is able to jump anywhere in the reference sequence for a fixed cost.  This 
