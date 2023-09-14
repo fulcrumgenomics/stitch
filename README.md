@@ -5,33 +5,83 @@
   <br>
 </p>
 
-Alignment for vector quality control
-
 <!---toc start-->
-- [stitch](#stitch)
-  - [stitch align](#stitch-align)
-    - [Optional Pre-alignment](#optional-pre-alignment)
-    - [Alignment Scoring](#alignment-scoring)
-    - [Alignment mode](#alignment-mode)
-    - [Circular contigs](#circular-contigs)
-    - [Additional Output Options](#additional-output-options)
-  - [Installing](#installing)
-    - [Installing with `cargo`](#installing-with-cargo)
-    - [Building From Source](#building-from-source)
-  - [Developing](#developing)
-  - [Releasing a New Version](#releasing-a-new-version)
-    - [Pre-requisites](#pre-requisites)
-    - [Prior to Any Release](#prior-to-any-release)
-    - [Semantic Versioning](#semantic-versioning)
-    - [Major Release](#major-release)
-    - [Minor and Patch Release](#minor-and-patch-release)
-    - [Release Candidate](#release-candidate)
+* [stitch](#stitch)
+   * [Disclaimer](#disclaimer)
+   * [Overview](#overview)
+   * [Installing](#installing)
+      * [Installing with cargo](#installing-with-cargo)
+      * [Building From Source](#building-from-source)
+   * [stitch align](#stitch-align)
+      * [Optional Pre-alignment](#optional-pre-alignment)
+      * [Alignment Scoring](#alignment-scoring)
+      * [Alignment mode](#alignment-mode)
+      * [Circular contigs](#circular-contigs)
+      * [Additional Output Options](#additional-output-options)
   
 <!---toc end-->
 
+## Disclaimer
+
+** Under active development - Alpha - Please contact us if you're considering using this software **
+
+Many features have not been tested, implemented, or considered. 
+Please submit an issue (or better yet, submit a pull request), or contact [Fulcrum Genomics](www.fulcrumgenomics.com)
+
+## Overview
+
+Toolkit for long read chimeric alignment, non-linear alignments where the alignment may jump within
+and/or between contigs.
+
+Potential use cases include, but are not limited to:
+
+1. Aligning vectors/plasmids/viruses (assemblies, long reads, etc) to a database of constructs to determine the component structure.
+2. Determining the structure of complex structural variants (e.g. chromthrypsis, cccDNA, etc)
+3. Per-read evidence for somatic fusions and structural variants
+
+## Installing
+
+### Installing with `cargo`
+To install with cargo you must first [install rust](https://doc.rust-lang.org/cargo/getting-started/installation.html).
+Which (On Mac OS and Linux) can be done with the command:
+
+```console
+curl https://sh.rustup.rs -sSf | sh
+```
+
+Then, to install `stitch` run:
+
+```console
+cargo install fg-stitch
+```
+
+### Building From Source
+
+First, clone the git repo:
+
+```console
+git clone https://github.com/fulcrumgenomics/stitch.git
+```
+
+Secondly, if you do not already have rust development tools installed, install via [rustup](https://rustup.rs/):
+
+```console
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Then build the toolkit in release mode:
+
+```console
+cd stitch
+cargo build --release
+./target/release/stitch --help
+```
+
 ## stitch align
 
-Perfoms alignment of long reads against one or more reference/expected vector/plasmid/construct(s).
+`stitch` was originally developed for alinging long reads from vector/plasmids/viruses to a large number of
+constructs to determine each read's component structure.  The description of `stitch` align is described
+in the context of this application.
 
 The alignment extends the traditional alignment algorithms by introducing a "jump" move/operator, 
 whereby the alignment is able to jump anywhere in the reference sequence for a fixed cost.  This 
@@ -94,114 +144,3 @@ how near the unaligned prefix/suffix must be to the start/end of the contig for 
 
 Additional options to pick which alignment is primary (versus secondary) for alignments that jump
 across contigs, as well as filtering out poorly aligned secondary alignments are given.
-
-## Installing
-
-### Installing with `cargo`
-To install with cargo you must first [install rust](https://doc.rust-lang.org/cargo/getting-started/installation.html).
-Which (On Mac OS and Linux) can be done with the command:
-
-```console
-curl https://sh.rustup.rs -sSf | sh
-```
-
-Then, to install `stitch` run:
-
-```console
-cargo install fg-stitch
-```
-
-### Building From Source
-
-First, clone the git repo:
-
-```console
-git clone https://github.com/fulcrumgenomics/stitch.git
-```
-
-Secondly, if you do not already have rust development tools installed, install via [rustup](https://rustup.rs/):
-
-```console
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-Then build the toolkit in release mode:
-
-```console
-cd stitch
-cargo build --release
-./target/release/stitch --help
-```
-
-## Developing
-
-`stitch` is developed in Rust and follows the conventions of using `rustfmt` and `clippy` to ensure both code quality and standardized formatting.
-When working on `stitch`, before pushing any commits, please first run `./ci/check.sh` and resolve any issues that are reported.
-
-## Releasing a New Version
-
-### Pre-requisites
-
-Install [`cargo-release`][cargo-release-link]
-
-```console
-cargo install cargo-release
-```
-
-### Prior to Any Release
-
-Create a release that will not try to push to `crates.io` and verify the command:
-
-```console
-cargo release [major,minor,patch,release,rc...] --no-publish
-```
-
-Note: "dry-run" is the default for cargo release.
-
-See the [`cargo-release` reference documentation][cargo-release-docs-link] for more information
-
-### Semantic Versioning
-
-This tool follows [Semantic Versioning](https://semver.org/).  In brief:
-
-* MAJOR version when you make incompatible API changes,
-* MINOR version when you add functionality in a backwards compatible manner, and
-* PATCH version when you make backwards compatible bug fixes.
-
-### Major Release
-
-To create a major release:
-
-```console
-cargo release major --execute
-```
-
-This will remove any pre-release extension, create a new tag and push it to github, and push the release to creates.io.
-
-Upon success, move the version to the [next candidate release](#release-candidate).
-
-Finally, make sure to [create a new release][new-release-link] on GitHub.
-
-### Minor and Patch Release
-
-To create a _minor_ (_patch_) release, follow the [Major Release](#major-release) instructions substituting `major` with `minor` (`patch`):
-
-```console
-cargo release minor --execute
-```
-
-### Release Candidate
-
-To move to the next release candidate:
-
-```console
-cargo release rc --no-tag --no-publish --execute
-```
-
-This will create or bump the pre-release version and push the changes to the main branch on github.
-This will not tag and publish the release candidate.
-If you would like to tag the release candidate on github, remove `--no-tag` to create a new tag and push it to github.
-
-[cargo-release-link]:      https://github.com/crate-ci/cargo-release
-[cargo-release-docs-link]: https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
-[new-release-link]:        https://github.com/fulcrumgenomics/stitch/releases/new
