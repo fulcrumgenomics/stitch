@@ -661,7 +661,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 *record.data_mut() = data;
             }
 
-            return Ok([record].to_vec());
+            return Ok(vec![record]);
         }
 
         let mut records = Vec::new();
@@ -735,7 +735,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 *record.flags_mut() = new_flags;
 
                 let (bases_vec, quals_vec, cigar) = match (is_forward, hard_clip && is_secondary) {
-                    (true, false) => (bases.to_vec(), quals.to_owned(), sub.cigar.clone()),
+                    (true, false) => (bases.to_owned(), quals.to_owned(), sub.cigar.clone()),
                     (true, true) => (
                         bases[sub.query_start..sub.query_end].to_vec(),
                         quals
