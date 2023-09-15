@@ -33,7 +33,7 @@ Stitch is a toolkit for analysis of chimeric reads in sequencing data (especiall
 Potential use cases include, but are not limited to:
 
 1. Aligning vectors/plasmids/viruses (assemblies, long reads, etc) to a database of constructs to determine the component structure
-2. Determining the structure of complex structural variants (e.g., chromthrypsis, cccDNA, etc.)
+2. Determining the structure of complex structural variants (e.g., chromthripsis, cccDNA, etc.)
 3. Per-read evidence for somatic fusions and other structural variants
 
 ## Installing
