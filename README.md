@@ -94,7 +94,7 @@ Multiple contigs in the input FASTA are supported.
 
 The `-p`/`--pre-alignment` option may be used to pre-align the read using banded local alignment to select only those reads with a minimum pre-alignment score to perform the full alignment.
 Additional options are availabe to control the k-mer size, band-width, and minimum alignment score for this step.
-Furthermore, the full alignmnet can be limited to align the read to just those reference contigs with minimum alignment score with the `-x`/`--pre-align-subset-contigs`.
+Furthermore, the full alignment can be limited to align the read to just those reference contigs with minimum alignment score with the `-x`/`--pre-align-subset-contigs`.
 This is useful when aligning to a large database of individual constructs as contigs, where the read is expected only to align to a small subset of the contigs.
 
 ### Alignment Scoring
