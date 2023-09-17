@@ -138,6 +138,8 @@ The SAM tags are set as follows:
 - ci: the index of the chain across all chains for this query
 - cn: the number of chains for this query
 - AS: the alignment score of the sub-alignment (not the chain, see as for that)
+- SA: the semicolon-delimited list of alignments for the given chain 
+      (rname, pos, strand, CIGAR, mapQ, NM)
 
 ### Optional pre-alignment
 
