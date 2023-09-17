@@ -965,8 +965,8 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 // mapQ
                 sa_string.push_str(&format!(",{mapq}"));
                 // NM
-                sa_string.push_str(",0"); // TODO
-                                          // Add it!
+                sa_string.push_str(&format!(",{}", sub.num_edits));
+                // Add it!
                 sa_strings.push(sa_string);
             }
 
