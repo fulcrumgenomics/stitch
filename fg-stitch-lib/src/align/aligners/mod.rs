@@ -46,7 +46,7 @@ use noodles::{
         alignment::Record as SamRecord,
         record::{
             cigar::op::{Kind, Op},
-            data::field::tag::{ALIGNMENT_HIT_COUNT, ALIGNMENT_SCORE, HIT_INDEX, TOTAL_HIT_COUNT},
+            data::field::tag::ALIGNMENT_SCORE,
             Cigar, Data, Flags, MappingQuality, QualityScores, ReadName as SamReadName, Sequence,
         },
     },
@@ -626,15 +626,16 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
     pub fn format(
         &self,
         fastq: &FastqOwnedRecord,
-        alignments: &[Alignment],
-        alt_score: Option<i32>,
+        chains: &[Alignment],
+        pre_alignment_score: Option<i32>,
     ) -> Result<Vec<SamRecord>> {
         let name = header_to_name(fastq.head())?;
         let read_name: SamReadName = name.parse()?;
         let bases = fastq.seq();
         let quals = fastq.qual();
 
-        if alignments.is_empty() {
+        // If there were no alignments, return an unaligned/unmapped record
+        if chains.is_empty() {
             let mut record = SamRecord::default();
 
             // read name
@@ -655,7 +656,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
             // mapping quality
             *record.mapping_quality_mut() = MappingQuality::new(0);
 
-            if let Some(score) = alt_score {
+            if let Some(score) = pre_alignment_score {
                 let mut data = Data::default();
                 data.insert(
                     "xs".parse().unwrap(),
@@ -667,48 +668,110 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
             return Ok([record].to_vec());
         }
 
+        // A note on how SAM flags are set
+        //
+        // Alignments provided to this function may actually be chains of sub-alignments, each
+        // alignments to different contigs or different sub-sequences of the same contig (i.e.
+        // jumping).  Therefore, we may have multiple linear "chains" of sub-alignments.
+        //
+        // Apologies in advance that "alignment" is overloaded here: input alignments are chains,
+        // where as each output SAM record is one alignment.
+        //
+        // Therefore, we set flags as follows:
+        // 1. One sub-alignment will (a) not have the secondary flag set, and (b) not have the
+        //    supplementary flag set.  This is the "primary" (representative) sub-alignment in the
+        //    "primary chain" (NB: not a formal term).
+        // 2. The remaining sub-alignments in the "primary chain" have the supplementary flag set,
+        //    but not the secondary flag set.  They are part of the best linear alignment chain,
+        //    but not the representative sub-alignment.
+        // 3. For "secondary chains", have one sub-alignment be representative.  Set the secondary
+        //    flag (since it's not in the "primary chain") but do not set the supplementary flag.
+        // 4. For "secondary chains", have the non-representative sub-alignments have both the
+        //    secondary and supplementary flags set.
+        //
+        // There also custom SAM tags to provide more information about each sub-alignment, in
+        // particular their order in the chain:
+        // - qs: the zero-based index of the first query base in the sub-alignment
+        // - qe: the zero-based exclusive index of the last query base in the sub-alignment
+        // - ts: the zero-based index of the first target base in the sub-alignment
+        // - te: the zero-based exclusive index of the last target base in the sub-alignment
+        // - as: the alignment score of the chain (not the sub-alignmnet, see AS for that)
+        // - xs: the sub-optimal alignment score, practically the maximum of any pre-alignment and
+        //       secondary chain.
+        // - si: the index of the sub-alignment in the current chain
+        // - cl: the number of sub-alignments in the current chain
+        // - ci: the index of the chain across all chains for this query
+        // - cn: the number of chains for this query
+        // - AS: the alignment score of the sub-alignment (not the chain, see as for that)
+        // TODO: add to the readme
+
         let mut records = Vec::new();
         let mut is_first = true;
-        let mut primary_score = MIN_SCORE;
-        for alignment in alignments {
+
+        // The alignment score for the representative aligment in the primary chain, used to filter
+        // secondary alignments from the output
+        let mut primary_alignment_score = MIN_SCORE;
+
+        // The alignment score of the next best alignment, the maximum of the pre-alignment
+        // (if any) and the secondary chains.
+        let suboptimal_score = {
+            let suboptimal_chain_score = chains.iter().skip(1).map(|a| a.score).max();
+            match (suboptimal_chain_score, pre_alignment_score) {
+                (None, None) => None,
+                (None, Some(score)) => Some(score),
+                (Some(score), None) => Some(score),
+                (Some(score), Some(alt_score)) => Some(score.max(alt_score)),
+            }
+        };
+
+        // Examine each alignment (chain of sub-alignments).  This assumes chains are sorted
+        // desecending by score
+        for (chain_index, chain) in chains.iter().enumerate() {
             let hard_clip = !self.opts.soft_clip;
+
+            // Get the sub-aligments for this chain
             let mut builder: SubAlignmentBuilder = SubAlignmentBuilder::new(self.opts.use_eq_and_x);
-            let mut subs = builder.build(alignment, true, &self.scoring);
+            let mut subs = builder.build(chain, true, &self.scoring);
             ensure!(!subs.is_empty());
 
-            let mut primary_index = if is_first {
-                let idx = match self.opts.pick_primary {
-                    PrimaryPickingStrategy::QueryLength => subs
-                        .iter()
-                        .enumerate()
-                        .max_by_key(|(_, alignment)| {
-                            (alignment.query_end - alignment.query_start, alignment.score)
-                        })
-                        .map_or(0, |(index, _)| index),
-                    PrimaryPickingStrategy::Score => subs
-                        .iter()
-                        .enumerate()
-                        .max_by_key(|(_, alignment)| {
-                            (alignment.score, alignment.query_end - alignment.query_start)
-                        })
-                        .map_or(0, |(index, _)| index),
-                };
-                primary_score = subs[idx].score;
-                idx
-            } else {
-                subs.len()
+            // Pick the sub-alignment that **will not** have the supplementary flag set.  There
+            // is one sub-alignment per chain that does not have the supplementary flag set.
+            let mut primary_sub_idx = match self.opts.pick_primary {
+                PrimaryPickingStrategy::QueryLength => subs
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, alignment)| {
+                        (alignment.query_end - alignment.query_start, alignment.score)
+                    })
+                    .map_or(0, |(index, _)| index),
+                PrimaryPickingStrategy::Score => subs
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, alignment)| {
+                        (alignment.score, alignment.query_end - alignment.query_start)
+                    })
+                    .map_or(0, |(index, _)| index),
             };
 
+            // the sub-alignment that is the "primary" amongst all sub-alignments across all chains
+            if chain_index == 0 {
+                primary_alignment_score = subs[primary_sub_idx].score;
+            }
+
             // Filter out sub-alignments that have score worse than X% of the primary
-            // if opts.  This changes the primary index!
+            // if specified.  This may change the primary index for this chain!
             if self.opts.filter_secondary {
-                let min_score = primary_score as f32 * self.opts.filter_secondary_pct / 100.0;
+                // Get the minimum alingmnet score to keep.
+                let min_score =
+                    primary_alignment_score as f32 * self.opts.filter_secondary_pct / 100.0;
                 let mut new_subs = Vec::new();
                 let mut old_index = 0;
                 while !subs.is_empty() {
                     let sub = subs.remove(0);
-                    if old_index == primary_index {
-                        primary_index = new_subs.len();
+                    // Update the index of the primary sub-alignment, as we may have removed
+                    // sub-alignments ahead of it
+                    if old_index == primary_sub_idx {
+                        primary_sub_idx = new_subs.len();
                     }
                     if sub.score as f32 >= min_score {
                         new_subs.push(sub);
@@ -718,8 +781,13 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 subs = new_subs;
             }
 
-            for (index, sub) in subs.iter().enumerate() {
-                let is_secondary = index != primary_index;
+            // Iterate through each sub-alignment in this chain, creating one SAM record per
+            for (sub_index, sub) in subs.iter().enumerate() {
+                // Set the supplementary flag if this sub-alignment is **not** the primary
+                let is_supplementary = sub_index == primary_sub_idx;
+                // Set the secondary flag if **not** part of the primary chain.
+                let is_secondary = chain_index > 0;
+
                 let mut record = SamRecord::default();
                 assert!(sub.contig_idx < 2 * self.target_seqs.len());
                 let is_forward: bool = sub.contig_idx < self.target_seqs.len();
@@ -735,8 +803,12 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 if is_secondary {
                     new_flags.insert(Flags::SECONDARY);
                 }
+                if is_supplementary {
+                    new_flags.insert(Flags::SUPPLEMENTARY);
+                }
                 *record.flags_mut() = new_flags;
 
+                // Extract the bases and qualities for this sub-alignment
                 let (bases_vec, quals_vec, cigar) = match (is_forward, hard_clip && is_secondary) {
                     (true, false) => (bases.to_vec(), quals.to_vec(), sub.cigar.clone()),
                     (true, true) => (
@@ -811,7 +883,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 }
 
                 // mapping quality
-                // TODO: base this on the alt_score
+                // TODO: base this on the suboptimal_score
                 if is_first {
                     *record.mapping_quality_mut() = MappingQuality::new(60);
                 } else {
@@ -838,29 +910,33 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 );
                 data.insert(
                     "as".parse().unwrap(),
-                    noodles::sam::record::data::field::Value::from(alignment.score),
+                    noodles::sam::record::data::field::Value::from(chain.score),
                 );
-                if let Some(score) = alt_score {
+                if let Some(score) = suboptimal_score {
                     data.insert(
                         "xs".parse().unwrap(),
                         noodles::sam::record::data::field::Value::from(score),
                     );
                 }
                 data.insert(
+                    "si".parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(sub_index as i32),
+                );
+                data.insert(
+                    "cl".parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(subs.len() as i32),
+                );
+                data.insert(
+                    "ci".parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(chain_index as i32),
+                );
+                data.insert(
+                    "cn".parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(chains.len() as i32),
+                );
+                data.insert(
                     ALIGNMENT_SCORE,
                     noodles::sam::record::data::field::Value::from(sub.score),
-                );
-                data.insert(
-                    HIT_INDEX,
-                    noodles::sam::record::data::field::Value::from(index as i32 + 1),
-                );
-                data.insert(
-                    ALIGNMENT_HIT_COUNT,
-                    noodles::sam::record::data::field::Value::from(subs.len() as i32),
-                );
-                data.insert(
-                    TOTAL_HIT_COUNT,
-                    noodles::sam::record::data::field::Value::from(subs.len() as i32),
                 );
                 *record.data_mut() = data;
 
