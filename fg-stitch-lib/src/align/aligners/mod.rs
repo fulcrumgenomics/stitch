@@ -22,6 +22,7 @@ use crate::{
             multi_contig_aligner::MultiContigAligner,
         },
         alignment::Alignment,
+        io::FastxOwnedRecord,
         scoring::Scoring,
         sub_alignment::SubAlignmentBuilder,
         PrimaryPickingStrategy,
@@ -39,7 +40,6 @@ use bio::alignment::{
 };
 use bit_set::BitSet;
 use constants::DEFAULT_ALIGNER_CAPACITY;
-use itertools::Itertools;
 use noodles::{
     core::Position,
     sam::{
@@ -51,7 +51,6 @@ use noodles::{
         },
     },
 };
-use seq_io::fastq::{OwnedRecord as FastqOwnedRecord, Record as FastqRecord};
 
 #[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
 pub struct JumpInfo {
@@ -236,15 +235,11 @@ pub struct Aligners<'a, F: MatchFunc> {
 impl Aligners<'_, MatchParams> {
     pub fn align(
         &mut self,
-        record: &FastqOwnedRecord,
+        record: &FastxOwnedRecord,
         target_seqs: &[TargetSeq],
         target_hashes: &[TargetHash],
     ) -> (Vec<Alignment>, Option<i32>) {
-        let query = record
-            .seq()
-            .iter()
-            .map(u8::to_ascii_uppercase)
-            .collect_vec();
+        let query = record.seq_upper_case();
         let mut contig_idx_to_prealign_score: IndexMap<i32> =
             IndexMap::new(self.multi_contig.len());
         if self.opts.pre_align {
@@ -625,7 +620,7 @@ fn header_to_name(header: &[u8]) -> Result<String> {
 impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
     pub fn format(
         &self,
-        fastq: &FastqOwnedRecord,
+        fastq: &FastxOwnedRecord,
         alignments: &[Alignment],
         alt_score: Option<i32>,
     ) -> Result<Vec<SamRecord>> {
@@ -644,10 +639,12 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
             *record.flags_mut() = Flags::UNMAPPED;
 
             // bases
-            *record.sequence_mut() = Sequence::try_from(bases.to_vec()).unwrap();
+            *record.sequence_mut() = Sequence::try_from(bases.to_owned()).unwrap();
 
             // qualities
-            *record.quality_scores_mut() = QualityScores::try_from(quals.to_vec()).unwrap();
+            if let Some(quals) = quals {
+                *record.quality_scores_mut() = QualityScores::try_from(quals.to_owned()).unwrap();
+            }
 
             // cigar
             *record.cigar_mut() = Cigar::default();
@@ -664,7 +661,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 *record.data_mut() = data;
             }
 
-            return Ok([record].to_vec());
+            return Ok(vec![record]);
         }
 
         let mut records = Vec::new();
@@ -738,26 +735,32 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 *record.flags_mut() = new_flags;
 
                 let (bases_vec, quals_vec, cigar) = match (is_forward, hard_clip && is_secondary) {
-                    (true, false) => (bases.to_vec(), quals.to_vec(), sub.cigar.clone()),
+                    (true, false) => (bases.to_owned(), quals.to_owned(), sub.cigar.clone()),
                     (true, true) => (
                         bases[sub.query_start..sub.query_end].to_vec(),
-                        quals[sub.query_start..sub.query_end].to_vec(),
+                        quals
+                            .as_ref()
+                            .map(|quals| quals[sub.query_start..sub.query_end].to_vec()),
                         Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
                             .unwrap(),
                     ),
                     (false, false) => (
                         reverse_complement(bases),
-                        quals.iter().copied().rev().collect(),
+                        quals
+                            .as_ref()
+                            .map(|quals| quals.iter().copied().rev().collect()),
                         Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
                             .unwrap(),
                     ),
                     (false, true) => (
                         reverse_complement(bases[sub.query_start..sub.query_end].to_vec()),
-                        quals[sub.query_start..sub.query_end]
-                            .iter()
-                            .copied()
-                            .rev()
-                            .collect(),
+                        quals.as_ref().map(|quals| {
+                            quals[sub.query_start..sub.query_end]
+                                .iter()
+                                .copied()
+                                .rev()
+                                .collect()
+                        }),
                         Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
                             .unwrap(),
                     ),
@@ -767,7 +770,9 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 *record.sequence_mut() = Sequence::try_from(bases_vec).unwrap();
 
                 // qualities
-                *record.quality_scores_mut() = QualityScores::try_from(quals_vec).unwrap();
+                if let Some(quals) = quals_vec {
+                    *record.quality_scores_mut() = QualityScores::try_from(quals).unwrap();
+                }
 
                 // cigar
                 let clip_op = if hard_clip && is_secondary {
@@ -877,18 +882,20 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
 #[cfg(test)]
 pub mod tests {
     use super::Builder;
-    use crate::util::target_seq::{self, TargetHash};
-    use seq_io::fastq::OwnedRecord as FastqOwnedRecord;
+    use crate::{
+        align::io::FastxOwnedRecord,
+        util::target_seq::{self, TargetHash},
+    };
 
     #[test]
     fn test_case_insensitive() {
         let seq = b"ACGGACAGATCGAATACGACAGGAC".to_vec();
         let target_seqs = [target_seq::TargetSeq::new("test-contig", &seq, false)];
         let mut aligners = Builder::default().build_aligners(&target_seqs);
-        let record = FastqOwnedRecord {
+        let record = FastxOwnedRecord {
             head: b"test-record".to_vec(),
             seq: seq.clone(),
-            qual: vec![b'#'; seq.len()],
+            qual: Some(vec![b'#'; seq.len()]),
         };
         let k = 7;
         let target_hashes: Vec<TargetHash> = target_seqs

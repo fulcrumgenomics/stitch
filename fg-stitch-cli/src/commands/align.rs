@@ -27,7 +27,7 @@ use std::{
 use stitch::{
     align::{
         io::{
-            FastqGroupingIterator, FastqThreadReader, OutputMessage, OutputResult,
+            FastxGroupingIterator, FastxThreadReader, Format, OutputMessage, OutputResult,
             READER_CHANNEL_NUM_CHUNKS,
         },
         AlignmentMode, Builder, PrimaryPickingStrategy,
@@ -93,10 +93,15 @@ impl ValueEnum for PrimaryPickingStrategy {
 /// default to the the value specified by `--jump-score`.
 #[derive(Parser, Debug, Clone)]
 #[clap(version = built_info::VERSION.as_str(), term_width=0)]
+#[group(id = "reads", required = true)]
 pub struct Align {
     /// The path to the input FASTQ with sequenced vector/plasmid/construct long reads.
-    #[clap(long, short = 'f', display_order = 1)]
-    reads_fastq: PathBuf,
+    #[clap(long, short = 'f', display_order = 1, group = "reads")]
+    reads_fastq: Option<PathBuf>,
+
+    /// The path to the input FASTA with sequenced vector/plasmid/construct long reads.
+    #[clap(long, short = 'a', display_order = 1, group = "reads")]
+    reads_fasta: Option<PathBuf>,
 
     /// The path to the referece vector/plasmid/construct FASTA sequence.
     #[clap(long, short = 'r', display_order = 2)]
@@ -272,9 +277,16 @@ pub struct Align {
 impl Align {
     /// Executes the align command
     pub fn execute(&self) -> anyhow::Result<()> {
+        // Create the thread to read in the FASTQ records
+        let (reads, format) = match (&self.reads_fastq, &self.reads_fasta) {
+            (Some(fastq), None) => (fastq, Format::FASTQ),
+            (None, Some(fastq)) => (fastq, Format::FASTA),
+            _ => panic!("Must specify exactly one of --reads-fastq or --reads-fasta"),
+        };
+
         info!("Starting alignment...");
-        info!("Reading reference FASTA from {}", self.ref_fasta.display());
-        info!("Reading reads FASTQ from {}", self.reads_fastq.display());
+        info!("Loading reference from {}", self.ref_fasta.display());
+        info!("Loading reads from {}", reads.display());
         // ensure!(self. > 1, "Must specify at least two threads");
         let progress_logger = ProgLogBuilder::new()
             .name("stitch-progress")
@@ -323,9 +335,7 @@ impl Align {
         // Read in the refefence/target FASTA records - these are shared across threads
         let target_seqs = Arc::new(target_seq::from_fasta(&self.ref_fasta, self.circular)?);
 
-        // Create the thread to read in the FASTQ records
-        let reader =
-            FastqThreadReader::new(self.reads_fastq.clone(), self.decompress, self.threads);
+        let reader = FastxThreadReader::new(reads.clone(), format, self.decompress, self.threads);
 
         // Create the channel to gracefully signal a shutdown of the aligner threads
         let (shutdown_tx, shutdown_rx) = unbounded::<()>();
@@ -351,7 +361,7 @@ impl Align {
                     loop {
                         // Try to process one chunk of alignments
                         if let Ok(msg) = to_align_rx.try_recv() {
-                            let iter = FastqGroupingIterator::new(msg.records.into_iter());
+                            let iter = FastxGroupingIterator::new(msg.records.into_iter());
                             let mut results: Vec<OutputResult> = Vec::new();
                             for group in iter {
                                 let first = group.first().unwrap();
