@@ -842,6 +842,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                             .unwrap(),
                     ),
                 };
+                let cigar_str = cigar.to_string();
 
                 // bases
                 *record.sequence_mut() = Sequence::try_from(bases_vec).unwrap();
@@ -944,6 +945,14 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 data.insert(
                     "cn".parse().unwrap(),
                     noodles::sam::record::data::field::Value::from(chains.len() as i32),
+                );
+                data.insert(
+                    "cg".parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from_str_type(
+                        &cigar_str,
+                        noodles::sam::record::data::field::Type::String,
+                    )
+                    .unwrap(),
                 );
                 data.insert(
                     ALIGNMENT_SCORE,
