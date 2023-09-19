@@ -51,7 +51,7 @@ use noodles::{
         alignment::Record as SamRecord,
         record::{
             cigar::op::{Kind, Op},
-            data::field::tag::ALIGNMENT_SCORE,
+            data::field::tag::{ALIGNMENT_SCORE, EDIT_DISTANCE, OTHER_ALIGNMENTS},
             Cigar, Data, Flags, MappingQuality, QualityScores, ReadName as SamReadName, Sequence,
         },
     },
@@ -673,7 +673,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
         // NB: please see the main README.md for the description of the custom SAM tags
         let mut records = Vec::new();
 
-        // The alignment score for the representative aligment in the primary chain, used to filter
+        // The alignment score for the representative alignment in the primary chain, used to filter
         // secondary alignments from the output
         let mut primary_alignment_score = MIN_SCORE;
 
@@ -683,18 +683,17 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
             let suboptimal_chain_score = chains.iter().skip(1).map(|a| a.score).max();
             match (suboptimal_chain_score, pre_alignment_score) {
                 (None, None) => None,
-                (None, Some(score)) => Some(score),
-                (Some(score), None) => Some(score),
+                (None, Some(score)) | (Some(score), None) => Some(score),
                 (Some(score), Some(alt_score)) => Some(score.max(alt_score)),
             }
         };
 
         // Examine each alignment (chain of sub-alignments).  This assumes chains are sorted
-        // desecending by score
+        // descending by score
         for (chain_idx, chain) in chains.iter().enumerate() {
             let hard_clip = !self.opts.soft_clip;
 
-            // Get the sub-aligments for this chain
+            // Get the sub-alignments for this chain
             let mut builder: SubAlignmentBuilder = SubAlignmentBuilder::new(self.opts.use_eq_and_x);
             let mut subs = builder.build(chain, true, &self.scoring);
             ensure!(!subs.is_empty());
@@ -746,6 +745,13 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 );
                 subs = new_subs;
             }
+
+            // The SAM records for this chain
+            let mut chain_records = Vec::new();
+
+            // Gather the SA string for each sub-alignment so we can later rotate the list to have
+            // the primary alignment at the start
+            let mut sa_strings: Vec<String> = Vec::new();
 
             // Iterate through each sub-alignment in this chain, creating one SAM record per
             for (sub_idx, sub) in subs.iter().enumerate() {
@@ -843,26 +849,30 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 if clip_suffix_len > 0 {
                     cigar_ops.push(Op::new(clip_op, clip_suffix_len));
                 }
-                *record.cigar_mut() = Cigar::try_from(cigar_ops).unwrap();
+                let cigar = Cigar::try_from(cigar_ops).unwrap();
+                let cigar_string = cigar.to_string();
+                *record.cigar_mut() = cigar;
 
                 // target id
-                *record.reference_sequence_id_mut() = Some(sub.contig_idx % self.target_seqs.len());
+                let reference_sequence_id = sub.contig_idx % self.target_seqs.len();
+                *record.reference_sequence_id_mut() = Some(reference_sequence_id);
 
                 // target start
-                if is_forward {
-                    *record.alignment_start_mut() = Position::new(sub.target_start + 1);
+                let reference_start = if is_forward {
+                    sub.target_start + 1
                 } else {
                     let target_len =
                         self.target_seqs[sub.contig_idx % self.target_seqs.len()].len();
-                    *record.alignment_start_mut() = Position::new(target_len - sub.target_end + 1);
-                }
+                    target_len - sub.target_end + 1
+                };
+                *record.alignment_start_mut() = Position::new(reference_start);
 
                 // mapping quality
                 // TODO: base this on the suboptimal_score
                 let mapq = if chain_idx == 0 { 60 } else { 0 };
                 *record.mapping_quality_mut() = MappingQuality::new(mapq);
 
-                // TODO: tags (e.g. XS, NM, MD)
+                // TODO: tags (e.g. XS, MD)
                 let mut data = Data::default();
                 data.insert(
                     QUERY_START.parse().unwrap(),
@@ -918,8 +928,47 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                     ALIGNMENT_SCORE,
                     noodles::sam::record::data::field::Value::from(sub.score),
                 );
+                data.insert(
+                    EDIT_DISTANCE,
+                    noodles::sam::record::data::field::Value::from(sub.num_edits),
+                );
                 *record.data_mut() = data;
 
+                chain_records.push(record);
+
+                // Build the SA string: `rname,pos,strand,CIGAR,mapQ,NM;`
+                let mut sa_string = String::with_capacity(128);
+                // rname
+                sa_string.push_str(&self.target_seqs[reference_sequence_id].name);
+                // pos
+                sa_string.push_str(&format!(",{reference_start},"));
+                // strand
+                sa_string.push_str(if is_forward { "+" } else { "-" });
+                // CIGAR
+                sa_string.push_str(&format!(",{cigar_string}"));
+                // mapQ
+                sa_string.push_str(&format!(",{mapq}"));
+                // NM
+                sa_string.push_str(&format!(",{}", sub.num_edits));
+                // Add it!
+                sa_strings.push(sa_string);
+            }
+
+            // Build the SA tag, then add to each record in this chain, and finally add it to the
+            // final vector of records.  Note: the SA strings must be rotated so the primary
+            // alignment is at the start
+            sa_strings.rotate_right(primary_sub_idx);
+            let sa_string = sa_strings.join(";");
+            for mut record in chain_records {
+                let data = record.data_mut();
+                data.insert(
+                    OTHER_ALIGNMENTS,
+                    noodles::sam::record::data::field::Value::from_str_type(
+                        &sa_string,
+                        noodles::sam::record::data::field::Type::String,
+                    )
+                    .unwrap(),
+                );
                 records.push(record);
             }
         }
