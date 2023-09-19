@@ -85,7 +85,7 @@ Since the alignment may jump to a previous reference position, different segment
 
 The output is in SAM/BAM format.
 If the alignment has `N` jumps, then the output will contain `N+1` records for the input read.
-In some cases, multiple "chains" of alignments are output.
+In some cases, multiple "chains" of alignments are output for a single read.
 See [SAM Flags and Tags](#sam-flags-and-tags) for details on how the SAM flags are set as well as
 custom SAM tags, to reason which alignments are part of which linear alignment chain, and which
 linear alignment chain is the "primary".
@@ -94,9 +94,9 @@ Multiple contigs in the input FASTA are supported (and encouraged).
 
 ### SAM Flags and Tags
 
-In the simplest case, a read (query) aligns to on contig (target) sub-sequence, such that a single
+In the simplest case, a read (query) aligns to one contig (target) sub-sequence, such that a single
 SAM alignment record is output.
-If a read has a linear alignment (chain), whereby (typically) non-overlapping subsequence of the
+If a read has a linear alignment (chain), whereby (typically) non-overlapping sub-sequences of the
 read are aligned to various sub-sequences of the reference (may be different contigs), then one
 SAM alignment record is output per sub-alignment in the chain.
 In some cases, there may be multiple chains of alignments reported, such that one linear chain
@@ -104,11 +104,11 @@ is the "representative" (or best) linear alignment of the read, and the others a
 In these cases, SAM alignment records are output for each sub-alignment across each chain.
 
 For example, there may be three (3) linear alignments of the read, with the first having six (6)
-sub-alignments (i.e. five (5) jumps), the second having two (2) sub-alignments (i.e. one jump),
-and the third having a single sub-alignment (i.e. no jumps).
+sub-alignments (i.e., five (5) jumps), the second having two (2) sub-alignments (i.e., one jump),
+and the third having a single sub-alignment (i.e., no jumps).
 In this case, there will be nine (9) SAM alignment records output (6 + 2 + 1).
 
-SAM flags and custom SAM tags are used to identify the chain the SAM alignemnt record belongs, as 
+SAM flags and custom SAM tags are used to identify the chain to which the SAM alignment record belongs, as 
 well as the order of the alignment records in the given linear chain.  In particular, SAM flags
 are set as follows:
 1. One sub-alignment will (a) not have the secondary flag set, and (b) not have the
@@ -117,9 +117,9 @@ are set as follows:
 2. The remaining sub-alignments in the "primary chain" have the supplementary flag set,
    but not the secondary flag set.  They are part of the best linear alignment chain,
    but not the representative sub-alignment.
-3. For "secondary chains", have one sub-alignment be representative.  Set the secondary
-   flag (since it's not in the "primary chain") but do not set the supplementary flag.
-4. For "secondary chains", have the non-representative sub-alignments have both the
+3. For "secondary chains", one sub-alignment is representative and has the secondary
+   flag set (since it's not in the "primary chain") but not the supplementary flag.
+4. For "secondary chains", the non-representative sub-alignments have both the
    secondary and supplementary flags set.
 
 See `--pick-primary` for how the primary alignment is chosen (and so when the secondary flag is 
@@ -130,14 +130,14 @@ The SAM tags are set as follows:
 - qe: the zero-based exclusive index of the last query base in the sub-alignment
 - ts: the zero-based index of the first target base in the sub-alignment
 - te: the zero-based exclusive index of the last target base in the sub-alignment
-- as: the alignment score of the chain (not the sub-alignmnet, see AS for that)
+- as: the alignment score of the chain (not the sub-alignmnet, see `AS` for that)
 - xs: the sub-optimal alignment score, practically the maximum of any pre-alignment and
       secondary chain.
 - si: the index of the sub-alignment in the current chain
 - cl: the number of sub-alignments in the current chain
 - ci: the index of the chain across all chains for this query
 - cn: the number of chains for this query
-- AS: the alignment score of the sub-alignment (not the chain, see as for that)
+- AS: the alignment score of the sub-alignment (not the chain, see `as` for that)
 - SA: the semicolon-delimited list of alignments for the given chain 
       (rname, pos, strand, CIGAR, mapQ, NM)
 

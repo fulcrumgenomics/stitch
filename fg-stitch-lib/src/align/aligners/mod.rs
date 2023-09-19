@@ -756,7 +756,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
             // Filter out sub-alignments that have score worse than X% of the primary
             // if specified.  This may change the primary index for this chain!
             if self.opts.filter_secondary {
-                // Get the minimum alingmnet score to keep.
+                // Get the minimum alignment score to keep.
                 let min_score =
                     primary_alignment_score as f32 * self.opts.filter_secondary_pct / 100.0;
                 let mut new_subs = Vec::new();
