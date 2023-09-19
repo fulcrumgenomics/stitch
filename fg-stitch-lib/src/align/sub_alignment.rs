@@ -15,6 +15,7 @@ pub struct SubAlignment {
     pub target_end: usize,
     pub cigar: Cigar,
     pub score: i32,
+    pub num_edits: i32,
 }
 
 /// A builder for [`SubAlignment`]s.
@@ -28,6 +29,7 @@ pub struct SubAlignmentBuilder {
     query_offset: usize,
     target_offset: usize,
     score: i32,
+    num_edits: i32,
     contig_idx: usize,
 }
 
@@ -85,6 +87,7 @@ impl SubAlignmentBuilder {
                     target_end: self.target_offset,
                     cigar: Cigar::try_from(self.elements.clone()).unwrap(),
                     score: self.score,
+                    num_edits: self.num_edits,
                 };
 
                 // reset
@@ -94,6 +97,7 @@ impl SubAlignmentBuilder {
                 self.query_start = new_query_start;
                 self.query_offset = new_query_start;
                 self.score = 0;
+                self.num_edits = 0;
 
                 Some(alignment)
             }
@@ -106,6 +110,7 @@ impl SubAlignmentBuilder {
                     target_end: self.target_offset,
                     cigar: Cigar::try_from(self.elements.clone()).unwrap(),
                     score: self.score,
+                    num_edits: self.num_edits,
                 };
 
                 // reset
@@ -143,6 +148,7 @@ impl SubAlignmentBuilder {
             query_offset: 0,
             target_offset: 0,
             score: 0,
+            num_edits: 0,
             contig_idx: 0,
         }
     }
@@ -178,6 +184,12 @@ impl SubAlignmentBuilder {
         let mut op_len = 0;
         for i in 0..chain.operations.len() {
             let op = chain.operations[i];
+            if AlignmentOperation::Subst == op
+                || AlignmentOperation::Ins == op
+                || AlignmentOperation::Del == op
+            {
+                self.num_edits += 1;
+            }
             if self.cmp_op(last, op) {
                 op_len += 1;
             } else {
@@ -201,6 +213,7 @@ impl SubAlignmentBuilder {
                 target_end: self.target_offset,
                 cigar: Cigar::try_from(self.elements.clone()).unwrap(),
                 score: self.score,
+                num_edits: self.num_edits,
                 contig_idx: self.contig_idx,
             };
             alignments.push(alignment);
@@ -216,6 +229,7 @@ impl SubAlignmentBuilder {
                     target_end: a.query_end,
                     cigar: Self::swap_cigar(&a.cigar),
                     score: a.score,
+                    num_edits: self.num_edits,
                     contig_idx: a.contig_idx,
                 })
                 .collect_vec()

@@ -37,7 +37,7 @@ Chimeric reads may span large inter- or intra-contig distances, and thus present
 Potential use cases include, but are not limited to:
 
 1. Aligning vectors/plasmids/viruses (assemblies, long reads, etc) to a database of constructs to determine the component structure
-2. Determining the structure of complex structural variants (e.g., chromthripsis, cccDNA, etc.)
+2. Determining the structure of complex structural variants (e.g., chromothripsis, cccDNA, etc.)
 3. Per-read evidence for somatic fusions and other structural variants
 
 ## Installing
@@ -132,7 +132,7 @@ The SAM tags are set as follows:
 | `qe` | `i` | the zero-based exclusive index of the last query base in the sub-alignment |
 | `ts` | `i` |  the zero-based index of the first target base in the sub-alignment |
 | `te` | `i` |  the zero-based exclusive index of the last target base in the sub-alignment |
-| `as` | `i` |  the alignment score of the chain (not the sub-alignmnet, see `AS` for that) |
+| `as` | `i` |  the alignment score of the chain (not the sub-alignment, see `AS` for that) |
 | `xs` | `i` |  the sub-optimal alignment score, practically the maximum of any pre-alignment and secondary chain |
 | `si` | `i` |  the index of the sub-alignment in the current chain |
 | `sc` | `Z` |  the cigar of the given sub-alignment, without any soft or hard clipping |
@@ -143,17 +143,15 @@ The SAM tags are set as follows:
 | `SA` | `Z` |  the semicolon-delimited list of alignments for the given chain (rname, pos, strand, CIGAR, mapQ, NM) |
 | `NM` | `i` | the number of edits in the sub-alignment |
 
-### Optional pre-alignment
-
 The `-p`/`--pre-alignment` option may be used to pre-align the read using banded local alignment to select only those reads with a minimum pre-alignment score to perform the full alignment.
-Additional options are availabe to control the k-mer size, band-width, and minimum alignment score for this step.
+Additional options are available to control the k-mer size, band-width, and minimum alignment score for this step.
 Furthermore, the full alignment can be limited to align the read to just those reference contigs with minimum alignment score with the `-x`/`--pre-align-subset-contigs`.
 This is useful when aligning to a large database of individual constructs as contigs, where the read is expected only to align to a small subset of the contigs.
 
 ### Alignment Scoring
 
 Alignments are scored using a match score, mismatch penalty, and affine gap penalty (a gap of size `k` costs `{-O} + {-E}*k`).
-Scores must be positive while penalities must be negative.
+Scores must be positive while penalties must be negative.
 
 The jump score can be specified with `--jump-score`.
 
@@ -162,7 +160,7 @@ The jump score may also be specified specific to the jump being within
 - the same contig but opposite strand (`--jump-score-same-contig-opposite-strand`), and
 - the across different contigs (`--jump-score-inter-contig`).
 
-If any of these options are not specified, then they will default to the the value specified by `--jump-score`.
+If any of these options are not specified, then they will default to the value specified by `--jump-score`.
 
 ### Alignment mode
 
