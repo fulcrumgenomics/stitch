@@ -161,23 +161,23 @@ impl SubAlignmentBuilder {
 
     pub fn build<F: MatchFunc>(
         &mut self,
-        alignment: &Alignment,
+        chain: &Alignment,
         swap: bool,
         scoring: &Scoring<F>,
     ) -> Vec<SubAlignment> {
         self.elements.clear();
-        self.query_start = alignment.xstart;
-        self.target_start = alignment.ystart;
+        self.query_start = chain.xstart;
+        self.target_start = chain.ystart;
         self.query_offset = self.query_start;
         self.target_offset = self.target_start;
         self.score = 0;
-        self.contig_idx = alignment.start_contig_idx;
+        self.contig_idx = chain.start_contig_idx;
 
         let mut alignments = Vec::new();
-        let mut last = alignment.operations[0];
+        let mut last = chain.operations[0];
         let mut op_len = 0;
-        for i in 0..alignment.operations.len() {
-            let op = alignment.operations[i];
+        for i in 0..chain.operations.len() {
+            let op = chain.operations[i];
             if self.cmp_op(last, op) {
                 op_len += 1;
             } else {

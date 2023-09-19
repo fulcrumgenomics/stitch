@@ -14,6 +14,7 @@
       * [Building From Source](#building-from-source)
    * [Usage](#usage)
       * [stitch align](#stitch-align)
+      * [SAM Flags and Tags](#sam-flags-and-tags)
       * [Optional Pre-alignment](#optional-pre-alignment)
       * [Alignment Scoring](#alignment-scoring)
       * [Alignment mode](#alignment-mode)
@@ -84,11 +85,63 @@ Since the alignment may jump to a previous reference position, different segment
 
 The output is in SAM/BAM format.
 If the alignment has `N` jumps, then the output will contain `N+1` records for the input read.
-One record is marked as primary (see `--pick-primary`), while the remaining records are marked as secondary.
-The HI/HN SAM tags are used to denote the order in which the alignments occur.
-Furthermore, the records are output by this tool in the order in which they align to the query/read sequence.
+In some cases, multiple "chains" of alignments are output for a single read.
+See [SAM Flags and Tags](#sam-flags-and-tags) for details on how the SAM flags are set as well as
+custom SAM tags, to reason which alignments are part of which linear alignment chain, and which
+linear alignment chain is the "primary".
 
-Multiple contigs in the input FASTA are supported.
+Multiple contigs in the input FASTA are supported (and encouraged).
+
+### SAM Flags and Tags
+
+In the simplest case, a read (query) aligns to one contig (target) sub-sequence, such that a single
+SAM alignment record is output.
+If a read has a linear alignment (chain), whereby (typically) non-overlapping sub-sequences of the
+read are aligned to various sub-sequences of the reference (may be different contigs), then one
+SAM alignment record is output per sub-alignment in the chain.
+In some cases, there may be multiple chains of alignments reported, such that one linear chain
+is the "representative" (or best) linear alignment of the read, and the others are "secondary".
+In these cases, SAM alignment records are output for each sub-alignment across each chain.
+
+For example, there may be three (3) linear alignments of the read, with the first having six (6)
+sub-alignments (i.e., five (5) jumps), the second having two (2) sub-alignments (i.e., one jump),
+and the third having a single sub-alignment (i.e., no jumps).
+In this case, there will be nine (9) SAM alignment records output (6 + 2 + 1).
+
+SAM flags and custom SAM tags are used to identify the chain to which the SAM alignment record belongs, as 
+well as the order of the alignment records in the given linear chain.  In particular, SAM flags
+are set as follows:
+1. One sub-alignment will (a) not have the secondary flag set, and (b) not have the
+   supplementary flag set.  This is the "primary" (representative) sub-alignment in the
+   "primary chain" (NB: not a formal term).
+2. The remaining sub-alignments in the "primary chain" have the supplementary flag set,
+   but not the secondary flag set.  They are part of the best linear alignment chain,
+   but not the representative sub-alignment.
+3. For "secondary chains", one sub-alignment is representative and has the secondary
+   flag set (since it's not in the "primary chain") but not the supplementary flag.
+4. For "secondary chains", the non-representative sub-alignments have both the
+   secondary and supplementary flags set.
+
+See `--pick-primary` for how the primary alignment is chosen in each chain.
+
+The SAM tags are set as follows:
+
+| tag | type | description |
+| --- | --- | --- |
+| `qs` | `i` | the zero-based index of the first query base in the sub-alignment |
+| `qe` | `i` | the zero-based exclusive index of the last query base in the sub-alignment |
+| `ts` | `i` |  the zero-based index of the first target base in the sub-alignment |
+| `te` | `i` |  the zero-based exclusive index of the last target base in the sub-alignment |
+| `as` | `i` |  the alignment score of the chain (not the sub-alignmnet, see `AS` for that) |
+| `xs` | `i` |  the sub-optimal alignment score, practically the maximum of any pre-alignment and secondary chain |
+| `si` | `i` |  the index of the sub-alignment in the current chain |
+| `sc` | `Z` |  the cigar of the given sub-alignment, without any soft or hard clipping |
+| `cl` | `i` |  the number of sub-alignments in the current chain |
+| `ci` | `i` |  the index of the chain across all chains for this query |
+| `cn` | `i` |  the number of chains for this query |
+| `AS` | `i` |  the alignment score of the sub-alignment (not the chain, see `as` for that) |
+| `SA` | `Z` |  the semicolon-delimited list of alignments for the given chain (rname, pos, strand, CIGAR, mapQ, NM) |
+| `NM` | `i` | the number of edits in the sub-alignment |
 
 ### Optional pre-alignment
 
