@@ -786,7 +786,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
             // Iterate through each sub-alignment in this chain, creating one SAM record per
             for (sub_index, sub) in subs.iter().enumerate() {
                 // Set the supplementary flag if this sub-alignment is **not** the primary
-                let is_supplementary = sub_index == primary_sub_idx;
+                let is_supplementary = sub_index != primary_sub_idx;
                 // Set the secondary flag if **not** part of the primary chain.
                 let is_secondary = chain_index > 0;
 
