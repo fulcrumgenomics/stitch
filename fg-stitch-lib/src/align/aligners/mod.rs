@@ -30,11 +30,7 @@ use crate::{
     util::{
         dna::reverse_complement,
         index_map::IndexMap,
-        tag::{
-            CHAIN_ALIGNMENT_SCORE, CHAIN_INDEX, CHAIN_LENGTH, NUMBER_OF_CHAINS, QUERY_END,
-            QUERY_START, SUBOPTIMAL_SCORE, SUB_ALIGNMENT_CIGAR, SUB_ALIGNMENT_INDEX, TARGET_END,
-            TARGET_START,
-        },
+        tag::CustomTag,
         target_seq::{TargetHash, TargetSeq},
     },
 };
@@ -875,37 +871,37 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 // TODO: tags (e.g. XS, MD)
                 let mut data = Data::default();
                 data.insert(
-                    QUERY_START.parse().unwrap(),
+                    CustomTag::QueryStart.into(),
                     noodles::sam::record::data::field::Value::from(sub.query_start as u32),
                 );
                 data.insert(
-                    QUERY_END.parse().unwrap(),
+                    CustomTag::QueryStart.into(),
                     noodles::sam::record::data::field::Value::from(sub.query_end as u32),
                 );
                 data.insert(
-                    TARGET_START.parse().unwrap(),
+                    CustomTag::TargetStart.into(),
                     noodles::sam::record::data::field::Value::from(sub.target_start as u32),
                 );
                 data.insert(
-                    TARGET_END.parse().unwrap(),
+                    CustomTag::TargetEnd.into(),
                     noodles::sam::record::data::field::Value::from(sub.target_end as u32),
                 );
                 data.insert(
-                    CHAIN_ALIGNMENT_SCORE.parse().unwrap(),
+                    CustomTag::ChainAlignmentScore.into(),
                     noodles::sam::record::data::field::Value::from(chain.score),
                 );
                 if let Some(score) = suboptimal_score {
                     data.insert(
-                        SUBOPTIMAL_SCORE.parse().unwrap(),
+                        CustomTag::SuboptimalScore.into(),
                         noodles::sam::record::data::field::Value::from(score),
                     );
                 }
                 data.insert(
-                    SUB_ALIGNMENT_INDEX.parse().unwrap(),
+                    CustomTag::SubAlignmentIndex.into(),
                     noodles::sam::record::data::field::Value::from(sub_idx as i32),
                 );
                 data.insert(
-                    SUB_ALIGNMENT_CIGAR.parse().unwrap(),
+                    CustomTag::SubAlignmentCigar.into(),
                     noodles::sam::record::data::field::Value::from_str_type(
                         &cigar_str,
                         noodles::sam::record::data::field::Type::String,
@@ -913,15 +909,15 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                     .unwrap(),
                 );
                 data.insert(
-                    CHAIN_LENGTH.parse().unwrap(),
+                    CustomTag::ChainLength.into(),
                     noodles::sam::record::data::field::Value::from(subs.len() as i32),
                 );
                 data.insert(
-                    CHAIN_INDEX.parse().unwrap(),
+                    CustomTag::ChainIndex.into(),
                     noodles::sam::record::data::field::Value::from(chain_idx as i32),
                 );
                 data.insert(
-                    NUMBER_OF_CHAINS.parse().unwrap(),
+                    CustomTag::NumberOfChains.into(),
                     noodles::sam::record::data::field::Value::from(chains.len() as i32),
                 );
                 data.insert(
