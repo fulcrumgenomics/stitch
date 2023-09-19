@@ -30,6 +30,11 @@ use crate::{
     util::{
         dna::reverse_complement,
         index_map::IndexMap,
+        tag::{
+            CHAIN_ALIGNMENT_SCORE, CHAIN_INDEX, CHAIN_LENGTH, NUMBER_OF_CHAINS, QUERY_END,
+            QUERY_START, SUBOPTIMAL_SCORE, SUB_ALIGNMENT_CIGAR, SUB_ALIGNMENT_INDEX, TARGET_END,
+            TARGET_START,
+        },
         target_seq::{TargetHash, TargetSeq},
     },
 };
@@ -46,7 +51,7 @@ use noodles::{
         alignment::Record as SamRecord,
         record::{
             cigar::op::{Kind, Op},
-            data::field::tag::{ALIGNMENT_HIT_COUNT, ALIGNMENT_SCORE, HIT_INDEX, TOTAL_HIT_COUNT},
+            data::field::tag::ALIGNMENT_SCORE,
             Cigar, Data, Flags, MappingQuality, QualityScores, ReadName as SamReadName, Sequence,
         },
     },
@@ -413,15 +418,15 @@ impl Aligners<'_, MatchParams> {
         query: &[u8],
         best_alignment: &Alignment,
         contig_indexes: &Option<BitSet<u32>>,
-        contig_index: usize,
+        contig_idx: usize,
         y_pivot: usize,
     ) -> Option<Alignment> {
         self.multi_contig_align(query, contig_indexes.as_ref()); // to get the traceback matrix
-        let new_alignment = self.multi_contig.traceback_from(query.len(), contig_index);
+        let new_alignment = self.multi_contig.traceback_from(query.len(), contig_idx);
         if let Some(new_alignment) = new_alignment {
             if new_alignment.score > best_alignment.score
-                && new_alignment.start_contig_idx == contig_index
-                && best_alignment.end_contig_idx == contig_index
+                && new_alignment.start_contig_idx == contig_idx
+                && best_alignment.end_contig_idx == contig_idx
             {
                 return Some(self.remove_clipping(new_alignment).split_at_y(y_pivot));
             }
@@ -621,15 +626,16 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
     pub fn format(
         &self,
         fastq: &FastxOwnedRecord,
-        alignments: &[Alignment],
-        alt_score: Option<i32>,
+        chains: &[Alignment],
+        pre_alignment_score: Option<i32>,
     ) -> Result<Vec<SamRecord>> {
         let name = header_to_name(fastq.head())?;
         let read_name: SamReadName = name.parse()?;
         let bases = fastq.seq();
         let quals = fastq.qual();
 
-        if alignments.is_empty() {
+        // If there were no alignments, return an unaligned/unmapped record
+        if chains.is_empty() {
             let mut record = SamRecord::default();
 
             // read name
@@ -652,7 +658,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
             // mapping quality
             *record.mapping_quality_mut() = MappingQuality::new(0);
 
-            if let Some(score) = alt_score {
+            if let Some(score) = pre_alignment_score {
                 let mut data = Data::default();
                 data.insert(
                     "xs".parse().unwrap(),
@@ -664,59 +670,90 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
             return Ok(vec![record]);
         }
 
+        // NB: please see the main README.md for the description of the custom SAM tags
         let mut records = Vec::new();
-        let mut is_first = true;
-        let mut primary_score = MIN_SCORE;
-        for alignment in alignments {
+
+        // The alignment score for the representative aligment in the primary chain, used to filter
+        // secondary alignments from the output
+        let mut primary_alignment_score = MIN_SCORE;
+
+        // The alignment score of the next best alignment, the maximum of the pre-alignment
+        // (if any) and the secondary chains.
+        let suboptimal_score = {
+            let suboptimal_chain_score = chains.iter().skip(1).map(|a| a.score).max();
+            match (suboptimal_chain_score, pre_alignment_score) {
+                (None, None) => None,
+                (None, Some(score)) => Some(score),
+                (Some(score), None) => Some(score),
+                (Some(score), Some(alt_score)) => Some(score.max(alt_score)),
+            }
+        };
+
+        // Examine each alignment (chain of sub-alignments).  This assumes chains are sorted
+        // desecending by score
+        for (chain_idx, chain) in chains.iter().enumerate() {
             let hard_clip = !self.opts.soft_clip;
+
+            // Get the sub-aligments for this chain
             let mut builder: SubAlignmentBuilder = SubAlignmentBuilder::new(self.opts.use_eq_and_x);
-            let mut subs = builder.build(alignment, true, &self.scoring);
+            let mut subs = builder.build(chain, true, &self.scoring);
             ensure!(!subs.is_empty());
 
-            let mut primary_index = if is_first {
-                let idx = match self.opts.pick_primary {
-                    PrimaryPickingStrategy::QueryLength => subs
-                        .iter()
-                        .enumerate()
-                        .max_by_key(|(_, alignment)| {
-                            (alignment.query_end - alignment.query_start, alignment.score)
-                        })
-                        .map_or(0, |(index, _)| index),
-                    PrimaryPickingStrategy::Score => subs
-                        .iter()
-                        .enumerate()
-                        .max_by_key(|(_, alignment)| {
-                            (alignment.score, alignment.query_end - alignment.query_start)
-                        })
-                        .map_or(0, |(index, _)| index),
-                };
-                primary_score = subs[idx].score;
-                idx
-            } else {
-                subs.len()
+            // Pick the sub-alignment that **will not** have the supplementary flag set.  There
+            // is one sub-alignment per chain that does not have the supplementary flag set.
+            let mut primary_sub_idx = match self.opts.pick_primary {
+                PrimaryPickingStrategy::QueryLength => subs
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, alignment)| {
+                        (alignment.query_end - alignment.query_start, alignment.score)
+                    })
+                    .map_or(0, |(index, _)| index),
+                PrimaryPickingStrategy::Score => subs
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, alignment)| {
+                        (alignment.score, alignment.query_end - alignment.query_start)
+                    })
+                    .map_or(0, |(index, _)| index),
             };
 
+            // the sub-alignment that is the "primary" amongst all sub-alignments across all chains
+            if chain_idx == 0 {
+                primary_alignment_score = subs[primary_sub_idx].score;
+            }
+
             // Filter out sub-alignments that have score worse than X% of the primary
-            // if opts.  This changes the primary index!
+            // if specified.  This may change the primary index for this chain!
             if self.opts.filter_secondary {
-                let min_score = primary_score as f32 * self.opts.filter_secondary_pct / 100.0;
-                let mut new_subs = Vec::new();
-                let mut old_index = 0;
-                while !subs.is_empty() {
-                    let sub = subs.remove(0);
-                    if old_index == primary_index {
-                        primary_index = new_subs.len();
-                    }
-                    if sub.score as f32 >= min_score {
-                        new_subs.push(sub);
-                    }
-                    old_index += 1;
-                }
+                // Get the minimum alignment score to keep.
+                let min_score =
+                    primary_alignment_score as f32 * self.opts.filter_secondary_pct / 100.0;
+
+                // Filter out sub-alignments that have score worse than X% of the primary
+                let subs_len = subs.len();
+                let (new_subs, _) = subs.into_iter().fold(
+                    (Vec::with_capacity(subs_len), 0),
+                    |(mut new_subs, old_idx), sub| {
+                        if old_idx == primary_sub_idx {
+                            primary_sub_idx = new_subs.len();
+                        }
+                        if sub.score as f32 >= min_score {
+                            new_subs.push(sub);
+                        }
+                        (new_subs, old_idx + 1)
+                    },
+                );
                 subs = new_subs;
             }
 
-            for (index, sub) in subs.iter().enumerate() {
-                let is_secondary = index != primary_index;
+            // Iterate through each sub-alignment in this chain, creating one SAM record per
+            for (sub_idx, sub) in subs.iter().enumerate() {
+                // Set the supplementary flag if this sub-alignment is **not** the primary
+                let is_supplementary = sub_idx != primary_sub_idx;
+                // Set the secondary flag if **not** part of the primary chain.
+                let is_secondary = chain_idx > 0;
+
                 let mut record = SamRecord::default();
                 assert!(sub.contig_idx < 2 * self.target_seqs.len());
                 let is_forward: bool = sub.contig_idx < self.target_seqs.len();
@@ -732,8 +769,12 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 if is_secondary {
                     new_flags.insert(Flags::SECONDARY);
                 }
+                if is_supplementary {
+                    new_flags.insert(Flags::SUPPLEMENTARY);
+                }
                 *record.flags_mut() = new_flags;
 
+                // Extract the bases and qualities for this sub-alignment
                 let (bases_vec, quals_vec, cigar) = match (is_forward, hard_clip && is_secondary) {
                     (true, false) => (bases.to_owned(), quals.to_owned(), sub.cigar.clone()),
                     (true, true) => (
@@ -765,6 +806,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                             .unwrap(),
                     ),
                 };
+                let cigar_str = cigar.to_string();
 
                 // bases
                 *record.sequence_mut() = Sequence::try_from(bases_vec).unwrap();
@@ -816,63 +858,70 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 }
 
                 // mapping quality
-                // TODO: base this on the alt_score
-                if is_first {
-                    *record.mapping_quality_mut() = MappingQuality::new(60);
-                } else {
-                    *record.mapping_quality_mut() = MappingQuality::new(0);
-                }
+                // TODO: base this on the suboptimal_score
+                let mapq = if chain_idx == 0 { 60 } else { 0 };
+                *record.mapping_quality_mut() = MappingQuality::new(mapq);
 
                 // TODO: tags (e.g. XS, NM, MD)
                 let mut data = Data::default();
                 data.insert(
-                    "qs".parse().unwrap(),
+                    QUERY_START.parse().unwrap(),
                     noodles::sam::record::data::field::Value::from(sub.query_start as u32),
                 );
                 data.insert(
-                    "qe".parse().unwrap(),
+                    QUERY_END.parse().unwrap(),
                     noodles::sam::record::data::field::Value::from(sub.query_end as u32),
                 );
                 data.insert(
-                    "ts".parse().unwrap(),
+                    TARGET_START.parse().unwrap(),
                     noodles::sam::record::data::field::Value::from(sub.target_start as u32),
                 );
                 data.insert(
-                    "te".parse().unwrap(),
+                    TARGET_END.parse().unwrap(),
                     noodles::sam::record::data::field::Value::from(sub.target_end as u32),
                 );
                 data.insert(
-                    "as".parse().unwrap(),
-                    noodles::sam::record::data::field::Value::from(alignment.score),
+                    CHAIN_ALIGNMENT_SCORE.parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(chain.score),
                 );
-                if let Some(score) = alt_score {
+                if let Some(score) = suboptimal_score {
                     data.insert(
-                        "xs".parse().unwrap(),
+                        SUBOPTIMAL_SCORE.parse().unwrap(),
                         noodles::sam::record::data::field::Value::from(score),
                     );
                 }
                 data.insert(
+                    SUB_ALIGNMENT_INDEX.parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(sub_idx as i32),
+                );
+                data.insert(
+                    SUB_ALIGNMENT_CIGAR.parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from_str_type(
+                        &cigar_str,
+                        noodles::sam::record::data::field::Type::String,
+                    )
+                    .unwrap(),
+                );
+                data.insert(
+                    CHAIN_LENGTH.parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(subs.len() as i32),
+                );
+                data.insert(
+                    CHAIN_INDEX.parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(chain_idx as i32),
+                );
+                data.insert(
+                    NUMBER_OF_CHAINS.parse().unwrap(),
+                    noodles::sam::record::data::field::Value::from(chains.len() as i32),
+                );
+                data.insert(
                     ALIGNMENT_SCORE,
                     noodles::sam::record::data::field::Value::from(sub.score),
-                );
-                data.insert(
-                    HIT_INDEX,
-                    noodles::sam::record::data::field::Value::from(index as i32 + 1),
-                );
-                data.insert(
-                    ALIGNMENT_HIT_COUNT,
-                    noodles::sam::record::data::field::Value::from(subs.len() as i32),
-                );
-                data.insert(
-                    TOTAL_HIT_COUNT,
-                    noodles::sam::record::data::field::Value::from(subs.len() as i32),
                 );
                 *record.data_mut() = data;
 
                 records.push(record);
             }
-
-            is_first = false;
         }
 
         Ok(records)
