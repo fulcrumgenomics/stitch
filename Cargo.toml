@@ -5,6 +5,7 @@ resolver = "2"
 [workspace.package]
 authors = ["Fulcrum Genomics LLC"]
 categories = ["science"]
+documentation = "https://github.com/fulcrumgenomics/stitch"
 edition = "2021"
 keywords = ["genomics", "bioinformatics", "sequencing", "alignment"]
 license = "MIT"
