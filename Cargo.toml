@@ -19,5 +19,25 @@ flume = "0.10.14"
 itertools = "0.10.5"
 noodles = { version = "0.37.0", features = ["core", "bgzf", "sam", "bam"] }
 
+# Config for 'cargo dist'
+[workspace.metadata.dist]
+# The preferred cargo-dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.2.0"
+# CI backends to support (see 'cargo dist generate-ci')
+ci = ["github"]
+# The installers to generate for each app
+installers = ["shell", "homebrew"]
+# A GitHub repo to push Homebrew formulas to
+tap = "fulcrumgenomics/stitch"
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["x86_64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
+# Publish jobs to run in CI
+publish-jobs = ["homebrew"]
+
 [profile.release]
 debug = true
+
+# The profile that 'cargo dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
