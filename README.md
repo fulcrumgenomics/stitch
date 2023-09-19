@@ -122,24 +122,26 @@ are set as follows:
 4. For "secondary chains", the non-representative sub-alignments have both the
    secondary and supplementary flags set.
 
-See `--pick-primary` for how the primary alignment is chosen (and so when the secondary flag is 
-set for the other alignments in the given chain).
+See `--pick-primary` for how the primary alignment is chosen in each chain.
 
 The SAM tags are set as follows:
-- qs: the zero-based index of the first query base in the sub-alignment
-- qe: the zero-based exclusive index of the last query base in the sub-alignment
-- ts: the zero-based index of the first target base in the sub-alignment
-- te: the zero-based exclusive index of the last target base in the sub-alignment
-- as: the alignment score of the chain (not the sub-alignmnet, see `AS` for that)
-- xs: the sub-optimal alignment score, practically the maximum of any pre-alignment and
-      secondary chain.
-- si: the index of the sub-alignment in the current chain
-- cl: the number of sub-alignments in the current chain
-- ci: the index of the chain across all chains for this query
-- cn: the number of chains for this query
-- AS: the alignment score of the sub-alignment (not the chain, see `as` for that)
-- SA: the semicolon-delimited list of alignments for the given chain 
-      (rname, pos, strand, CIGAR, mapQ, NM)
+
+| tag | type | description |
+| --- | --- | --- |
+| `qs` | `i` | the zero-based index of the first query base in the sub-alignment |
+| `qe` | `i` | the zero-based exclusive index of the last query base in the sub-alignment |
+| `ts` | `i` |  the zero-based index of the first target base in the sub-alignment |
+| `te` | `i` |  the zero-based exclusive index of the last target base in the sub-alignment |
+| `as` | `i` |  the alignment score of the chain (not the sub-alignmnet, see `AS` for that) |
+| `xs` | `i` |  the sub-optimal alignment score, practically the maximum of any pre-alignment and secondary chain |
+| `si` | `i` |  the index of the sub-alignment in the current chain |
+| `sc` | `Z` |  the cigar of the given sub-alignment, without any soft or hard clipping |
+| `cl` | `i` |  the number of sub-alignments in the current chain |
+| `ci` | `i` |  the index of the chain across all chains for this query |
+| `cn` | `i` |  the number of chains for this query |
+| `AS` | `i` |  the alignment score of the sub-alignment (not the chain, see `as` for that) |
+| `SA` | `Z` |  the semicolon-delimited list of alignments for the given chain (rname, pos, strand, CIGAR, mapQ, NM) |
+| `NM` | `i` | the number of edits in the sub-alignment |
 
 ### Optional pre-alignment
 
