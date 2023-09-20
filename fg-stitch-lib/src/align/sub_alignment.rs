@@ -231,7 +231,7 @@ impl SubAlignmentBuilder {
                     target_end: a.query_end,
                     cigar: Self::swap_cigar(&a.cigar),
                     score: a.score,
-                    num_edits: self.num_edits,
+                    num_edits: a.num_edits,
                     contig_idx: a.contig_idx,
                 })
                 .collect_vec()
