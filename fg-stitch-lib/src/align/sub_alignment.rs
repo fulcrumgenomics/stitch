@@ -119,6 +119,7 @@ impl SubAlignmentBuilder {
                 self.target_start = self.target_offset;
                 self.query_start = self.query_offset;
                 self.score = 0;
+                self.num_edits = 0;
 
                 Some(alignment)
             }
@@ -177,6 +178,7 @@ impl SubAlignmentBuilder {
         self.query_offset = self.query_start;
         self.target_offset = self.target_start;
         self.score = 0;
+        self.num_edits = 0;
         self.contig_idx = chain.start_contig_idx;
 
         let mut alignments = Vec::new();
@@ -229,7 +231,7 @@ impl SubAlignmentBuilder {
                     target_end: a.query_end,
                     cigar: Self::swap_cigar(&a.cigar),
                     score: a.score,
-                    num_edits: self.num_edits,
+                    num_edits: a.num_edits,
                     contig_idx: a.contig_idx,
                 })
                 .collect_vec()
