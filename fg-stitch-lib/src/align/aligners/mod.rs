@@ -875,7 +875,7 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                     noodles::sam::record::data::field::Value::from(sub.query_start as u32),
                 );
                 data.insert(
-                    CustomTag::QueryStart.into(),
+                    CustomTag::QueryEnd.into(),
                     noodles::sam::record::data::field::Value::from(sub.query_end as u32),
                 );
                 data.insert(
@@ -919,14 +919,6 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 data.insert(
                     CustomTag::NumberOfChains.into(),
                     noodles::sam::record::data::field::Value::from(chains.len() as i32),
-                );
-                data.insert(
-                    "cg".parse().unwrap(),
-                    noodles::sam::record::data::field::Value::from_str_type(
-                        &cigar_str,
-                        noodles::sam::record::data::field::Type::String,
-                    )
-                    .unwrap(),
                 );
                 data.insert(
                     ALIGNMENT_SCORE,
