@@ -864,8 +864,29 @@ impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
                 *record.alignment_start_mut() = Position::new(reference_start);
 
                 // mapping quality
-                // TODO: base this on the suboptimal_score
-                let mapq = if chain_idx == 0 { 60 } else { 0 };
+                // Only the primary chain gets a non-zero MAPQ. If there is no suboptimal score,
+                // we assume it's a unique alignment and give it the highest value (60). Otherwise
+                // we scale the value based on the difference between the best score and the
+                // suboptimal score.
+                let mapq = if chain_idx != 0 {
+                    0
+                } else {
+                    match (chain.score, suboptimal_score) {
+                        (_, None) => 60,
+                        (_, Some(score)) if score == 0 => 60,
+                        (score, Some(sub)) if score <= sub => 0,
+                        (score, Some(sub)) => {
+                            let mapq = -10.0 * f64::log10((sub as f64) / (score as f64));
+                            if mapq < 0.0 {
+                                0
+                            } else if mapq > 60.0 {
+                                60
+                            } else {
+                                mapq as u8
+                            }
+                        }
+                    }
+                };
                 *record.mapping_quality_mut() = MappingQuality::new(mapq);
 
                 // TODO: tags (e.g. XS, MD)
