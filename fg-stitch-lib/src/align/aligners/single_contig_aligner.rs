@@ -5,7 +5,7 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::{cmp::max, i32, iter::repeat};
+use std::{cmp::max, iter::repeat};
 
 use crate::align::{aligners::constants::AlignmentMode, scoring::Scoring, traceback::TB_XJUMP};
 use bio::{

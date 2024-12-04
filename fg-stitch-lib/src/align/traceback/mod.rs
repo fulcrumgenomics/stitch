@@ -60,7 +60,7 @@ pub mod packed_length_cell;
 pub mod simple_cell;
 
 cfg_if::cfg_if! {
-    if #[cfg(low_mem)] {
+    if #[cfg(feature = "low_mem")] {
         pub type Cell = simple_cell::SimpleCell;
     } else {
         pub type Cell = packed_length_cell::PackedLengthCell;

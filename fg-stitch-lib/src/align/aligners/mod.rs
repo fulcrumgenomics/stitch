@@ -618,7 +618,7 @@ fn header_to_name(header: &[u8]) -> Result<String> {
         .context("empty read name")
 }
 
-impl<'a, F: MatchFunc> SamRecordFormatter<'a, F> {
+impl<F: MatchFunc> SamRecordFormatter<'_, F> {
     pub fn format(
         &self,
         fastq: &FastxOwnedRecord,

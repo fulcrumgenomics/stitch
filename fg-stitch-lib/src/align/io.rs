@@ -106,7 +106,7 @@ pub struct InputMessage {
 /// The output result of a single pairwise alignment as a triple:
 /// 1. the FASTQ record that was aligned
 /// 2. None if no alignment was found, otherwise some tuple of pairwise alignment and the target
-///   strand to which the alignment was made.
+///    strand to which the alignment was made.
 /// 3. The alignment score, if aligned.
 pub type OutputResult = (FastxOwnedRecord, Vec<Alignment>, Option<i32>);
 

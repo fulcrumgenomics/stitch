@@ -16,7 +16,6 @@ pub const DEFAULT_ALIGNER_CAPACITY: usize = 200;
 /// value associated with the clipping operations are the lengths clipped. In case
 /// of standard modes like Global, Semi-Global and Local alignment, the clip operations
 /// are filtered out.
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Eq, PartialEq, Debug, Copy, Clone, Hash)]
 pub enum AlignmentOperation {
     Match,               // Consumes one x and one y base
@@ -93,7 +92,6 @@ impl AlignmentOperation {
 /// appropriately set.
 ///
 /// The default alignment mode is Global.
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
 pub enum AlignmentMode {
     /// Aligns a sub-sequence of the read versus a sub-sequence of the reference

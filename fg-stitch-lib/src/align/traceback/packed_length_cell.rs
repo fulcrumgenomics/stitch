@@ -15,10 +15,10 @@ use super::{SValue, TracebackCell};
 /// - bits 0-3 are reserved for *_POS
 /// - bits 4-31 are reserved for alignment length (27 bits each)
 /// - bit 31 for each of s/i/d is reserved for the upper 3-bits of the jump contig index (i.e. which contig did we jump from)
-/// The `aux` field is packed as follows:
+///   The `aux` field is packed as follows:
 /// - bits 0-4 are for the lower 5-bits of the jump contig index (i.e. which contig did we jump from)
 /// - bits 5-31 are for the "from" jump index in the contig (i.e. where in the given contig did we jump from)
-/// Also contains s_from (u32), so we have a totoal of u32 * 4 = 128 bits
+///   Also contains s_from (u32), so we have a totoal of u32 * 4 = 128 bits
 #[derive(
     Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize,
 )]

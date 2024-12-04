@@ -12,7 +12,6 @@ use crate::align::aligners::constants::{
 /// lengths of sequences x and y, and the alignment edit operations. The start position
 /// and end position of the alignment does not include the clipped regions. The length
 /// of clipped regions are already encapsulated in the Alignment Operation.
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Eq, PartialEq, Clone, Default)]
 pub struct Alignment {
     // FIXME: rename to Alignment
