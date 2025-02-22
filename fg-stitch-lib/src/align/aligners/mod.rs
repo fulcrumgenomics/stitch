@@ -687,6 +687,53 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
         // Examine each alignment (chain of sub-alignments).  This assumes chains are sorted
         // descending by score
         for (chain_idx, chain) in chains.iter().enumerate() {
+            // Compute the mapping quality for the primary chain (all other chains have MAPQ = 0). If
+            // there is no suboptimal score, we assume it's a unique alignment and give it the highest
+            // value. Otherwise we use a modification of the algorithm from BWA MEM for single-end
+            // reads (https://github.com/lh3/bwa/blob/139f68fc4c3747813783a488aef2adc86626b01b/bwamem.c#L982).
+            // Currently, all sub-alignments in the primary chain are assigned the same MAPQ.
+            let mapq = if chain_idx == 0 {
+                const MAX_MAPQ: u8 = 60;
+                match (chain.score, suboptimal_score) {
+                    (0, _) => 0,
+                    (_, None) => MAX_MAPQ,
+                    (_, Some(suboptimal_score)) if suboptimal_score == 0 => MAX_MAPQ,
+                    (score, Some(suboptimal_score)) if score <= suboptimal_score => 0,
+                    (score, Some(suboptimal_score)) => {
+                        // Heng's magic constants
+                        const MEM_MAPQ_COEF: f32 = 30.0;
+                        const NUM_SUBOPTIMAL_COEF: f32 = 4.343;
+                        const IDENTITY_THRESHOLD: f32 = 0.95;
+
+                        assert!(chain.length as f64 <= f32::MAX as f64);
+                        let chain_length = chain.length as f32;
+                        let identity = 1.0
+                            - (((chain_length * self.opts.match_score as f32)
+                                - chain.score as f32)
+                                / (self.opts.match_score + self.opts.mismatch_score) as f32
+                                / chain_length);
+                        let mut mapq = MEM_MAPQ_COEF
+                            * (1.0 - (suboptimal_score as f32 / score as f32))
+                            * f32::ln(chain_length);
+                        if identity < IDENTITY_THRESHOLD {
+                            mapq = mapq * identity * identity;
+                        }
+                        if chains.len() > 1 {
+                            mapq -= NUM_SUBOPTIMAL_COEF * f32::ln(chains.len() as f32);
+                        }
+                        if mapq < 0.0 {
+                            0
+                        } else if mapq > MAX_MAPQ as f32 {
+                            MAX_MAPQ
+                        } else {
+                            mapq.round() as u8
+                        }
+                    }
+                }
+            } else {
+                0
+            };
+
             let hard_clip = !self.opts.soft_clip;
 
             // Get the sub-alignments for this chain
@@ -863,9 +910,12 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                 };
                 *record.alignment_start_mut() = Position::new(reference_start);
 
-                // mapping quality
-                // TODO: base this on the suboptimal_score
-                let mapq = if chain_idx == 0 { 60 } else { 0 };
+                // TODO: Currently, all sub-alignments are assigned the chain-level MAPQ. Ideally,
+                // each sub-alignment should have it's own MAPQ calculated from its score, length,
+                // number of sub-optimal sub-alignments, and score of the next best sub-alignment,
+                // but it's not clear how to do that given different chains may have sub-alignments
+                // derived from different query intervals. It might be worth trying to decipher
+                // how it's done in Minimap2 https://github.com/lh3/minimap2/blob/ace990c381c647d6cf8fae7a4941a7b56fb67ae7/hit.c#L421.
                 *record.mapping_quality_mut() = MappingQuality::new(mapq);
 
                 // TODO: tags (e.g. XS, MD)
