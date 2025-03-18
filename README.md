@@ -34,7 +34,7 @@
 
 ## Disclaimer
 
-**Stitch is under active development, and is currently alpha quality software for research purposes only.** Many features have not been tested, implemented, or considered. Please contact [Fulcrum Genomics](www.fulcrumgenomics.com) if you're considering using this software.
+**Stitch is under active development, and is currently alpha quality software for research purposes only.** Many features have not been tested, implemented, or considered. Please contact [Fulcrum Genomics](https://www.fulcrumgenomics.com) if you're considering using this software.
 Please submit an [issue](https://github.com/fulcrumgenomics/stitch/issues) - or better yet, a [pull request](https://github.com/fulcrumgenomics/stitch/pulls) - if you discover a bug or identify a missing feature.
 
 ## Overview
