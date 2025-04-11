@@ -5,7 +5,7 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::{cmp::max, iter::repeat};
+use std::{cmp::max, iter::repeat_n};
 
 use crate::align::{aligners::constants::AlignmentMode, scoring::Scoring, traceback::TB_XJUMP};
 use bio::{
@@ -105,9 +105,9 @@ impl<F: MatchFunc> SingleContigAligner<F> {
             self.D[k].clear();
             self.S[k].clear();
 
-            self.D[k].extend(repeat(MIN_SCORE).take(m + 1));
-            self.I[k].extend(repeat(MIN_SCORE).take(m + 1));
-            self.S[k].extend(repeat(MIN_SCORE).take(m + 1));
+            self.D[k].extend(repeat_n(MIN_SCORE, m + 1));
+            self.I[k].extend(repeat_n(MIN_SCORE, m + 1));
+            self.S[k].extend(repeat_n(MIN_SCORE, m + 1));
 
             self.S[k][0] = 0;
 
@@ -117,11 +117,11 @@ impl<F: MatchFunc> SingleContigAligner<F> {
                 tb.set_s_all(TB_START, 0, self.contig_idx, 0);
                 self.traceback.set(0, 0, tb);
                 self.Lx.clear();
-                self.Lx.extend(repeat(0usize).take(n + 1));
+                self.Lx.extend(repeat_n(0usize, n + 1));
                 self.Ly.clear();
-                self.Ly.extend(repeat(0usize).take(m + 1));
+                self.Ly.extend(repeat_n(0usize, m + 1));
                 self.Sn.clear();
-                self.Sn.extend(repeat(MIN_SCORE).take(m + 1));
+                self.Sn.extend(repeat_n(MIN_SCORE, m + 1));
                 self.Sn[0] = self.scoring.yclip_suffix;
                 self.Ly[0] = n;
             }
@@ -563,7 +563,7 @@ impl<F: MatchFunc> SingleContigAligner<F> {
     /// * `gap_extend` - the score for extending a gap (should be negative)
     /// * `jump_score` - the score for jumping back in the query (should not be positive)
     /// * `match_fn` - function that returns the score for substitutions
-    ///    (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
+    ///   (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
     pub fn new(gap_open: i32, gap_extend: i32, jump_score: i32, match_fn: F) -> Self {
         SingleContigAligner::with_capacity(
             DEFAULT_ALIGNER_CAPACITY,
@@ -586,7 +586,7 @@ impl<F: MatchFunc> SingleContigAligner<F> {
     /// * `gap_extend` - the score for extending a gap (should be negative)
     /// * `jump_score` - the score for jumping back in the query (should not be positive)
     /// * `match_fn` - function that returns the score for substitutions
-    ///    (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
+    ///   (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
     pub fn with_capacity(
         m: usize,
         n: usize,

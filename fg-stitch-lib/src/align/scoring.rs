@@ -32,7 +32,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// * `gap_extend` - the score for extending a gap (should not be positive)
     /// * `jump_score` - the score for jumping in the query (should not be positive)
     /// * `match_fn` - function that returns the score for substitutions
-    ///    (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
+    ///   (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
     pub fn with_jump_score(gap_open: i32, gap_extend: i32, jump_score: i32, match_fn: F) -> Self {
         assert!(gap_open <= 0, "gap_open can't be positive");
         assert!(gap_extend <= 0, "gap_extend can't be positive");
@@ -54,7 +54,7 @@ impl<F: MatchFunc> Scoring<F> {
     /// * `jump_score_same_contig_opposite_strand` - the score for jumping to the same contig and opposite strand in the query (should not be positive)
     /// * `jump_score_inter_contig` - the score for jumping to a different contig in the query (should not be positive)
     /// * `match_fn` - function that returns the score for substitutions
-    ///    (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
+    ///   (see also [`bio::alignment::pairwise::Scoring`](struct.Scoring.html))
     pub fn with_jump_scores(
         gap_open: i32,
         gap_extend: i32,
