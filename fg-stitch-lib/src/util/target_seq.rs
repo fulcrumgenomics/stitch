@@ -81,12 +81,12 @@ pub fn from_fasta(file: &PathBuf, circular: bool) -> Result<Vec<TargetSeq>> {
             let contig_is_circular = fields
                 .iter()
                 .filter(|field| field.starts_with("TP"))
-                .filter_map(|field| field.split_terminator(':').last())
+                .filter_map(|field| field.split_terminator(':').next_back())
                 .any(|field| field == "circular");
             let contig_name = fields
                 .iter()
                 .filter(|field| field.starts_with("SN"))
-                .find_map(|field| field.split_terminator(':').last())
+                .find_map(|field| field.split_terminator(':').next_back())
                 .unwrap();
             circular_contigs.insert(contig_name.to_owned(), contig_is_circular);
         }
