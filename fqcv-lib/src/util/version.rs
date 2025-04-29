@@ -5,6 +5,8 @@ lazy_static! {
     pub static ref NUM_CPU: String = num_cpus::get().to_string();
 }
 
+// This is dependent on all crates in the workspace having the same version. If versioning moves
+// to be crate-specific, each crate should have its own build script and version.rs.
 pub mod built_info {
     use lazy_static::lazy_static;
     include!(concat!(env!("OUT_DIR"), "/built.rs"));

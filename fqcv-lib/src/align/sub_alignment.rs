@@ -1,10 +1,7 @@
 use itertools::Itertools;
-use noodles::sam::record::cigar::Op;
-use noodles::sam::record::Cigar;
+use noodles::sam::record::{cigar::Op, Cigar};
 
-use super::aligners::constants::AlignmentOperation;
-use super::alignment::Alignment;
-use super::scoring::Scoring;
+use super::{aligners::constants::AlignmentOperation, alignment::Alignment, scoring::Scoring};
 use bio::alignment::pairwise::MatchFunc;
 use noodles::sam::record::cigar::op::Kind;
 

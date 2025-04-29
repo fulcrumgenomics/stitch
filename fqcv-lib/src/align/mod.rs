@@ -1,5 +1,3 @@
-use clap::ValueEnum;
-
 pub(crate) mod aligners;
 mod alignment;
 pub(crate) mod io;
@@ -8,7 +6,7 @@ pub(crate) mod sub_alignment;
 mod traceback;
 
 /// The various strategies to pick the primary alignment amonst multiple sub-alignments.
-#[derive(Default, Debug, PartialEq, Eq, Copy, Clone, ValueEnum)]
+#[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
 pub enum PrimaryPickingStrategy {
     #[default]
     QueryLength,

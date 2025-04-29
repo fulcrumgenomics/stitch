@@ -4,48 +4,46 @@
 // Licensed under the MIT license (http://opensource.org/licenses/MIT)
 // This file may not be copied, modified, or distributed
 // except according to those terms.
-
-use bit_set::BitSet;
-
-use anyhow::{ensure, Context, Result};
-use bio::alignment::pairwise::MatchFunc;
-
-use crate::align::aligners::constants::AlignmentOperation::{Del, Ins, Match, Subst, Xjump};
-use crate::align::PrimaryPickingStrategy;
-use crate::commands::align::Align;
-use crate::util::dna::reverse_complement;
-use crate::util::index_map::IndexMap;
-use crate::util::target_seq::{TargetHash, TargetSeq};
-
-use crate::align::aligners::constants::{AlignmentMode, MIN_SCORE};
-use crate::align::aligners::multi_contig_aligner::MultiContigAligner;
-use crate::align::alignment::Alignment;
-use crate::align::scoring::Scoring;
-use bio::alignment::pairwise::banded::Aligner as BandedAligner;
-use bio::alignment::pairwise::MatchParams;
-use bio::alignment::pairwise::Scoring as BioScoring;
-use bio::alignment::sparse::HashMapFx as BandedHashMapFx;
-use noodles::core::Position;
-use noodles::sam::alignment::Record as SamRecord;
-use noodles::sam::record::cigar::op::Kind;
-use noodles::sam::record::cigar::op::Op;
-use noodles::sam::record::data::field::tag::ALIGNMENT_HIT_COUNT;
-use noodles::sam::record::data::field::tag::ALIGNMENT_SCORE;
-use noodles::sam::record::data::field::tag::HIT_INDEX;
-use noodles::sam::record::data::field::tag::TOTAL_HIT_COUNT;
-use noodles::sam::record::Cigar;
-use noodles::sam::record::Data;
-use noodles::sam::record::Flags;
-use noodles::sam::record::MappingQuality;
-use noodles::sam::record::QualityScores;
-use noodles::sam::record::ReadName as SamReadName;
-use noodles::sam::record::Sequence;
-use seq_io::fastq::OwnedRecord as FastqOwnedRecord;
-use seq_io::fastq::Record as FastqRecord;
-
 use self::constants::DEFAULT_ALIGNER_CAPACITY;
-
 use super::sub_alignment::SubAlignmentBuilder;
+use crate::{
+    align::{
+        aligners::{
+            constants::{
+                AlignmentMode,
+                AlignmentOperation::{Del, Ins, Match, Subst, Xjump},
+                MIN_SCORE,
+            },
+            multi_contig_aligner::MultiContigAligner,
+        },
+        alignment::Alignment,
+        scoring::Scoring,
+        PrimaryPickingStrategy,
+    },
+    util::{
+        dna::reverse_complement,
+        index_map::IndexMap,
+        target_seq::{TargetHash, TargetSeq},
+    },
+};
+use anyhow::{ensure, Context, Result};
+use bio::alignment::{
+    pairwise::{banded::Aligner as BandedAligner, MatchFunc, MatchParams, Scoring as BioScoring},
+    sparse::HashMapFx as BandedHashMapFx,
+};
+use bit_set::BitSet;
+use noodles::{
+    core::Position,
+    sam::{
+        alignment::Record as SamRecord,
+        record::{
+            cigar::op::{Kind, Op},
+            data::field::tag::{ALIGNMENT_HIT_COUNT, ALIGNMENT_SCORE, HIT_INDEX, TOTAL_HIT_COUNT},
+            Cigar, Data, Flags, MappingQuality, QualityScores, ReadName as SamReadName, Sequence,
+        },
+    },
+};
+use seq_io::fastq::{OwnedRecord as FastqOwnedRecord, Record as FastqRecord};
 
 pub(crate) mod constants;
 pub(crate) mod multi_contig_aligner;
@@ -115,6 +113,16 @@ pub struct Aligners<'a, F: MatchFunc> {
     multi_contig: MultiContigAligner<'a, F>,
     // The alignment mode
     mode: AlignmentMode,
+}
+
+pub struct AlignersBuilder {
+
+}
+
+impl AlignersBuilder {
+    pub fn build<'a, F: MatchFunc>() -> Aligners<'a, F> {
+        
+    }
 }
 
 pub fn build_aligners<'a>(opts: &Align, target_seqs: &'a [TargetSeq]) -> Aligners<'a, MatchParams> {

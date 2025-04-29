@@ -1,5 +1,3 @@
-use clap::ValueEnum;
-
 /// Value to use as a 'negative infinity' score. Should be close to `i32::MIN`,
 /// but avoid underflow when used with reasonable scoring parameters or even
 /// adding two negative infinities. Use ~ `0.4 * i32::MIN`
@@ -93,7 +91,7 @@ impl AlignmentOperation {
 ///
 /// The default alignment mode is Global.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Default, Debug, PartialEq, Eq, Copy, Clone, ValueEnum)]
+#[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
 pub enum AlignmentMode {
     /// Aligns a sub-sequence of the read versus a sub-sequence of the reference
     #[default]

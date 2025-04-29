@@ -1,11 +1,15 @@
-use crate::align::aligners::constants::DEFAULT_ALIGNER_CAPACITY;
-use crate::align::aligners::single_contig_aligner::SingleContigAligner;
-use crate::align::alignment::Alignment;
-use crate::align::scoring::Scoring;
-use crate::align::traceback::{traceback, traceback_all, traceback_from};
-use crate::util::index_map::IndexMap;
-use bio::alignment::pairwise::MatchFunc;
-use bio::utils::TextSlice;
+use crate::{
+    align::{
+        aligners::{
+            constants::DEFAULT_ALIGNER_CAPACITY, single_contig_aligner::SingleContigAligner,
+        },
+        alignment::Alignment,
+        scoring::Scoring,
+        traceback::{traceback, traceback_all, traceback_from},
+    },
+    util::index_map::IndexMap,
+};
+use bio::{alignment::pairwise::MatchFunc, utils::TextSlice};
 use bit_set::BitSet;
 use itertools::Itertools;
 

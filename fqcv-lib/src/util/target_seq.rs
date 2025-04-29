@@ -1,15 +1,12 @@
 use std::path::PathBuf;
 
 use crate::{align::io::BUFFER_SIZE, util::dna::reverse_complement};
-use anyhow::Context;
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use bio::alignment::sparse::{hash_kmers, HashMapFx};
 use fgoxide::io::Io;
 use itertools::{self, Itertools};
-use seq_io::fasta::Reader as FastaReader;
-use seq_io::fasta::Record as FastaRecord;
-use std::collections::HashMap;
-use std::io::BufRead;
+use seq_io::fasta::{Reader as FastaReader, Record as FastaRecord};
+use std::{collections::HashMap, io::BufRead};
 
 /// Contains the forward and reverse complement of a DNA sequence for a single contig.
 #[derive(Default, Debug, PartialEq, Eq, Clone)]

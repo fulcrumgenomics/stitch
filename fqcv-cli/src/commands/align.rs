@@ -1,12 +1,4 @@
-use crate::align::aligners::constants::AlignmentMode;
-use crate::align::aligners::to_records;
-use crate::align::io::FastqGroupingIterator;
-use crate::align::io::FastqThreadReader;
-use crate::align::io::OutputMessage;
-use crate::align::io::OutputResult;
-use crate::align::io::READER_CHANNEL_NUM_CHUNKS;
-use crate::align::scoring::Scoring;
-use crate::align::PrimaryPickingStrategy;
+use super::command::Command;
 use crate::util::target_seq::from_fasta;
 use crate::util::target_seq::TargetHash;
 use crate::util::version::built_info;
@@ -15,6 +7,13 @@ use anyhow::Result;
 use bio::alignment::pairwise::MatchParams;
 use clap::Parser;
 use flume::unbounded;
+use fqcv::align::aligners::{
+    self,
+    constants::AlignmentMode,
+    io::{self, FastqGroupingIterator, FastqThreadReader, OutputMessage, OutputResult},
+    scoring::Scoring,
+    PrimaryPickingStrategy,
+};
 use itertools::{self, Itertools};
 use log::info;
 use noodles::bam::Writer as BamWriter;
@@ -286,7 +285,7 @@ impl Align {
                         .iter()
                         .map(|target_seq| target_seq.build_target_hash(opts.k))
                         .collect();
-                    let mut aligners = crate::align::aligners::build_aligners(&opts, &target_seqs);
+                    let mut aligners = fqcv::align::aligners::build_aligners(&opts, &target_seqs);
                     loop {
                         // Try to process one chunk of alignments
                         if let Ok(msg) = to_align_rx.try_recv() {
@@ -394,5 +393,11 @@ impl Align {
             })?;
 
         Ok(())
+    }
+}
+
+impl Command for Align {
+    fn execute(&self) -> anyhow::Result<()> {
+        Align::execute(self)
     }
 }

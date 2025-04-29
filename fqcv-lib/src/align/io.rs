@@ -2,11 +2,11 @@ use anyhow::{Context, Result};
 use flate2::bufread::MultiGzDecoder;
 use flume::{bounded, Receiver, Sender};
 use seq_io::fastq::{OwnedRecord as FastqOwnedRecord, Reader as FastqReader};
-use std::path::PathBuf;
-use std::thread::JoinHandle;
 use std::{
     fs::File,
     io::{BufReader, Read},
+    path::PathBuf,
+    thread::JoinHandle,
 };
 
 use crate::util::io::{is_fastq_path, is_gzip_path};

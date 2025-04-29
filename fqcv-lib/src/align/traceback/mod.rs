@@ -1,7 +1,6 @@
 use bit_set::BitSet;
 
-use crate::align::aligners::constants::MIN_SCORE;
-use crate::util::index_map::IndexMap;
+use crate::{align::aligners::constants::MIN_SCORE, util::index_map::IndexMap};
 
 use super::{
     aligners::{
@@ -11,8 +10,7 @@ use super::{
     alignment::Alignment,
 };
 use bio::alignment::pairwise::MatchFunc;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Default, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct SValue {

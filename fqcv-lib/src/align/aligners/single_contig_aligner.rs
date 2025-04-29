@@ -5,36 +5,24 @@
 // This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::cmp::max;
-use std::i32;
-use std::iter::repeat;
+use std::{cmp::max, i32, iter::repeat};
 
-use crate::align::aligners::constants::AlignmentMode;
-use crate::align::scoring::Scoring;
-use crate::align::traceback::TB_XJUMP;
-use bio::alignment::pairwise::MatchFunc;
-use bio::alignment::pairwise::MatchParams;
-use bio::utils::TextSlice;
+use crate::align::{aligners::constants::AlignmentMode, scoring::Scoring, traceback::TB_XJUMP};
+use bio::{
+    alignment::pairwise::{MatchFunc, MatchParams},
+    utils::TextSlice,
+};
 
-use crate::align::aligners::constants::AlignmentOperation;
-use crate::align::aligners::constants::DEFAULT_ALIGNER_CAPACITY;
-use crate::align::alignment::Alignment;
+use crate::align::{
+    aligners::constants::{AlignmentOperation, DEFAULT_ALIGNER_CAPACITY},
+    alignment::Alignment,
+};
 
-use super::constants::MIN_SCORE;
-use super::JumpInfo;
-use crate::align::traceback::traceback;
-use crate::align::traceback::Cell;
-use crate::align::traceback::Traceback;
-use crate::align::traceback::TracebackCell;
-use crate::align::traceback::TB_DEL;
-use crate::align::traceback::TB_INS;
-use crate::align::traceback::TB_MATCH;
-use crate::align::traceback::TB_START;
-use crate::align::traceback::TB_SUBST;
-use crate::align::traceback::TB_XCLIP_PREFIX;
-use crate::align::traceback::TB_XCLIP_SUFFIX;
-use crate::align::traceback::TB_YCLIP_PREFIX;
-use crate::align::traceback::TB_YCLIP_SUFFIX;
+use super::{constants::MIN_SCORE, JumpInfo};
+use crate::align::traceback::{
+    traceback, Cell, Traceback, TracebackCell, TB_DEL, TB_INS, TB_MATCH, TB_START, TB_SUBST,
+    TB_XCLIP_PREFIX, TB_XCLIP_SUFFIX, TB_YCLIP_PREFIX, TB_YCLIP_SUFFIX,
+};
 
 /// A generalized Smith-Waterman aligner, allowing for the alignment to jump forward
 /// (or backward) in `x` (on the same strand).
