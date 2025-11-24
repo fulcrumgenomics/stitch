@@ -46,16 +46,16 @@ impl<T: Clone> IndexMap<T> {
         self.contains(index as usize)
     }
 
-    pub fn get(&self, index: usize) -> Option<T> {
+    pub fn get(&self, index: usize) -> Option<&T> {
         if index < self.data.len() {
-            self.data[index].clone()
+            self.data[index].as_ref()
         } else {
             None
         }
     }
 
     #[inline(always)]
-    pub fn get_u32(&self, index: u32) -> Option<T> {
+    pub fn get_u32(&self, index: u32) -> Option<&T> {
         self.get(index as usize)
     }
 
@@ -114,7 +114,7 @@ pub mod tests {
         assert_eq!(imap.values().collect_vec(), vec![&2]);
         assert_eq!(imap.capacity(), 5);
         assert_eq!(imap.get(0), None);
-        assert_eq!(imap.get(1), Some(2));
+        assert_eq!(imap.get(1), Some(&2));
         assert_eq!(imap.get(2), None);
         assert_eq!(imap.get(3), None);
 
@@ -125,10 +125,10 @@ pub mod tests {
         assert_eq!(imap.values().collect_vec(), vec![&2, &4]);
         assert_eq!(imap.capacity(), 11);
         assert_eq!(imap.get(0), None);
-        assert_eq!(imap.get(1), Some(2));
+        assert_eq!(imap.get(1), Some(&2));
         assert_eq!(imap.get(2), None);
         assert_eq!(imap.get(3), None);
-        assert_eq!(imap.get(10), Some(4));
+        assert_eq!(imap.get(10), Some(&4));
 
         imap.reserve(11);
         assert_eq!(imap.capacity(), 11);
@@ -138,6 +138,6 @@ pub mod tests {
         assert_eq!(imap.get(11), None);
 
         imap.put(11, 124);
-        assert_eq!(imap.get(11), Some(124));
+        assert_eq!(imap.get(11), Some(&124));
     }
 }
