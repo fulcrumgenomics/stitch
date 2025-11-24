@@ -388,7 +388,7 @@ pub mod tests {
     use crate::align::aligners::constants::{
         AlignmentMode,
         AlignmentMode::Local,
-        AlignmentOperation::{Del, Ins, Match, Subst, Xjump, Yclip, Yjump},
+        AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xjump, Yclip, Yjump},
     };
 
     use super::Alignment;
@@ -676,18 +676,6 @@ pub mod tests {
             length: 10,
         }
     }
-
-    // Test for Y-suffix clipping bug fix (PR #69, commit eefe378)
-    //
-    // Bug: Line 356 incorrectly used `Xclip` instead of `Yclip` for Y-suffix clipping
-    // in circular contig realignment. This caused incorrect CIGAR strings.
-    //
-    // Note: The existing split_at_y tests implicitly cover this fix. While they don't
-    // explicitly assert the operation type, they verify correct CIGAR output which would
-    // fail if Xclip/Yclip were swapped. An explicit test for this specific line proved
-    // complex due to the intricate setup needed to trigger Y-suffix clipping in split_at_y.
-    //
-    // The fix is simple and localized: changed `Xclip` to `Yclip` on line 356.
 
     #[rstest]
     #[case(&empty_alignment(), 0, 0, 0, 0, 0, 0, &String::new(), 0)]
