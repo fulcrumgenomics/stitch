@@ -337,7 +337,10 @@ pub fn traceback_from<F: MatchFunc>(
                 i = s_value.from as usize;
                 next_layer = cur_aligner.traceback.get(i, j).get_s().tb;
             }
-            _ => panic!("Dint expect this!"),
+            _ => {
+                // Unexpected traceback value - return None to indicate alignment failure
+                return None;
+            }
         }
         last_layer = next_layer;
     }
@@ -355,6 +358,12 @@ pub fn traceback_from<F: MatchFunc>(
             yend = 0;
         }
     }
+    // Create alignment with Custom mode. This is an internal-only mode that indicates
+    // the alignment was extracted directly from the traceback matrix. The operations
+    // vector already contains all necessary operations (including clipping) as determined
+    // by the traceback process. Setting mode to Custom ensures that downstream processing
+    // (specifically remove_clipping()) won't modify these operations, preserving the
+    // alignment structure as computed by the dynamic programming algorithm.
     let alignment = Alignment {
         score,
         ystart,

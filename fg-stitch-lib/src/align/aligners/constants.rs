@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Error};
+use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
 /// Value to use as a 'negative infinity' score. Should be close to `i32::MIN`,
@@ -16,7 +17,7 @@ pub const DEFAULT_ALIGNER_CAPACITY: usize = 200;
 /// value associated with the clipping operations are the lengths clipped. In case
 /// of standard modes like Global, Semi-Global and Local alignment, the clip operations
 /// are filtered out.
-#[derive(Eq, PartialEq, Debug, Copy, Clone, Hash)]
+#[derive(Eq, PartialEq, Debug, Copy, Clone, Hash, Serialize, Deserialize)]
 pub enum AlignmentOperation {
     Match,               // Consumes one x and one y base
     Subst,               // Consumes one x and one y base
@@ -92,7 +93,7 @@ impl AlignmentOperation {
 /// appropriately set.
 ///
 /// The default alignment mode is Global.
-#[derive(Default, Debug, PartialEq, Eq, Copy, Clone)]
+#[derive(Default, Debug, PartialEq, Eq, Copy, Clone, Serialize, Deserialize)]
 pub enum AlignmentMode {
     /// Aligns a sub-sequence of the read versus a sub-sequence of the reference
     #[default]
@@ -103,6 +104,11 @@ pub enum AlignmentMode {
     TargetLocal,
     /// Aligns the full read versus the full reference.
     Global,
+    /// Internal-only mode used by traceback_from/traceback_all when retrieving alignments
+    /// from the traceback matrix. This mode is automatically set when alignments are extracted
+    /// during suboptimal alignment discovery. It should NEVER be set directly by users via the
+    /// API. The clipping behavior for this mode is handled by the traceback process itself,
+    /// not by the scoring parameters.
     Custom,
 }
 

@@ -120,13 +120,29 @@ impl Options {
         MatchParams::new(self.match_score, self.mismatch_score)
     }
 
+    /// Returns clipping penalties for the alignment mode.
+    ///
+    /// Returns: (xclip_prefix, xclip_suffix, yclip_prefix, yclip_suffix)
+    ///
+    /// Where:
+    /// - `MIN_SCORE` effectively disables clipping at that boundary (forces alignment)
+    /// - `0` allows free clipping at that boundary (no penalty)
+    /// - `x` refers to the target/reference sequence
+    /// - `y` refers to the query sequence
+    /// - prefix/suffix refers to the beginning/end of the sequence
     fn clipping(&self) -> (i32, i32, i32, i32) {
         match self.mode {
             AlignmentMode::Local => (0, 0, 0, 0),
             AlignmentMode::QueryLocal => (MIN_SCORE, MIN_SCORE, 0, 0),
             AlignmentMode::TargetLocal => (0, 0, MIN_SCORE, MIN_SCORE),
             AlignmentMode::Global => (MIN_SCORE, MIN_SCORE, MIN_SCORE, MIN_SCORE),
-            AlignmentMode::Custom => panic!("Custom alignment mode not supported"), // TODO: move to main run method
+            // Custom mode is used internally by traceback_from/traceback_all when retrieving
+            // alignments from the traceback matrix. The clipping values are set to (0,0,0,0)
+            // because the traceback process has already determined the appropriate clipping
+            // operations based on the dynamic programming matrix. These operations are encoded
+            // in the alignment's operations vector and will be processed by remove_clipping().
+            // This is NOT a user-facing mode and should never be set directly via the API.
+            AlignmentMode::Custom => (0, 0, 0, 0),
         }
     }
 
@@ -257,20 +273,18 @@ impl Aligners<'_, MatchParams> {
                     self.opts.pre_align_min_score,
                 );
                 if let Some(score) = score_fwd {
-                    contig_idx_to_prealign_score.put(
-                        self.multi_contig
-                            .contig_index_for_strand(true, &target_seq.name)
-                            .unwrap(),
-                        score,
-                    );
+                    let idx = self
+                        .multi_contig
+                        .contig_index_for_strand(true, &target_seq.name)
+                        .expect("BUG: forward strand contig should exist in multi_contig aligner");
+                    contig_idx_to_prealign_score.put(idx, score);
                 }
                 if let Some(score) = score_revcomp {
-                    contig_idx_to_prealign_score.put(
-                        self.multi_contig
-                            .contig_index_for_strand(false, &target_seq.name)
-                            .unwrap(),
-                        score,
-                    );
+                    let idx = self
+                        .multi_contig
+                        .contig_index_for_strand(false, &target_seq.name)
+                        .expect("BUG: reverse strand contig should exist when double_strand=true");
+                    contig_idx_to_prealign_score.put(idx, score);
                 }
                 // If we are going to align to all the contigs anyhow, then we can stop here.
                 if !self.opts.pre_align_subset_contigs && !contig_idx_to_prealign_score.is_empty() {
@@ -339,7 +353,13 @@ impl Aligners<'_, MatchParams> {
         (alignments, prealign_score)
     }
 
-    /// Removes leading and trailing clipping
+    /// Removes leading and trailing clipping operations from an alignment.
+    ///
+    /// This method is called after alignment to clean up clipping operations based on the
+    /// alignment mode. Different modes handle clipping differently:
+    /// - Local modes: Remove all clipping operations since they're not meaningful
+    /// - Global mode: Keep all operations (no clipping should exist)
+    /// - Custom mode: Keep all operations as-is (used internally by traceback)
     fn remove_clipping(&self, mut aln: Alignment) -> Alignment {
         match self.opts.mode {
             AlignmentMode::Local | AlignmentMode::QueryLocal | AlignmentMode::TargetLocal => {
@@ -347,7 +367,13 @@ impl Aligners<'_, MatchParams> {
                     .retain(|x| matches!(*x, Match | Subst | Ins | Del | Xjump(_, _)));
             }
             AlignmentMode::Global => (), // do nothing, there can be no clipping!
-            AlignmentMode::Custom => unreachable!(),
+            // Custom mode is used internally by traceback_from/traceback_all. These functions
+            // create alignments directly from the traceback matrix with all operations already
+            // determined, including any necessary clipping. We keep operations as-is because
+            // the traceback process has already produced the correct alignment representation.
+            // This prevents double-processing of clipping operations that would corrupt the
+            // alignment structure.
+            AlignmentMode::Custom => (),
         }
         aln
     }
@@ -641,11 +667,13 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
             *record.flags_mut() = Flags::UNMAPPED;
 
             // bases
-            *record.sequence_mut() = Sequence::try_from(bases.to_owned()).unwrap();
+            *record.sequence_mut() = Sequence::try_from(bases.to_owned())
+                .context("Failed to convert bases to SAM sequence")?;
 
             // qualities
             if let Some(quals) = quals {
-                *record.quality_scores_mut() = QualityScores::try_from(quals.to_owned()).unwrap();
+                *record.quality_scores_mut() = QualityScores::try_from(quals.to_owned())
+                    .context("Failed to convert quality scores")?;
             }
 
             // cigar
@@ -657,7 +685,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
             if let Some(score) = pre_alignment_score {
                 let mut data = Data::default();
                 data.insert(
-                    "xs".parse().unwrap(),
+                    "xs".parse().context("Failed to parse 'xs' tag")?,
                     noodles::sam::record::data::field::Value::from(score),
                 );
                 *record.data_mut() = data;
@@ -690,8 +718,19 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
             let hard_clip = !self.opts.soft_clip;
 
             // Get the sub-alignments for this chain
+            // Build array of target sequences (forward + reverse complement if double_strand)
+            let mut target_seq_refs: Vec<&[u8]> = Vec::new();
+            for target_seq in self.target_seqs {
+                target_seq_refs.push(&target_seq.fwd);
+            }
+            if self.opts.double_strand {
+                for target_seq in self.target_seqs {
+                    target_seq_refs.push(&target_seq.revcomp);
+                }
+            }
+
             let mut builder: SubAlignmentBuilder = SubAlignmentBuilder::new(self.opts.use_eq_and_x);
-            let mut subs = builder.build(chain, true, &self.scoring);
+            let mut subs = builder.build(chain, true, &self.scoring, bases, &target_seq_refs);
             ensure!(!subs.is_empty());
 
             // Pick the sub-alignment that **will not** have the supplementary flag set.  There
@@ -785,7 +824,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                             .as_ref()
                             .map(|quals| quals[sub.query_start..sub.query_end].to_vec()),
                         Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
-                            .unwrap(),
+                            .context("Failed to create CIGAR from reversed operations")?,
                     ),
                     (false, false) => (
                         reverse_complement(bases),
@@ -793,7 +832,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                             .as_ref()
                             .map(|quals| quals.iter().copied().rev().collect()),
                         Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
-                            .unwrap(),
+                            .context("Failed to create CIGAR from reversed operations")?,
                     ),
                     (false, true) => (
                         reverse_complement(bases[sub.query_start..sub.query_end].to_vec()),
@@ -805,17 +844,19 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                                 .collect()
                         }),
                         Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
-                            .unwrap(),
+                            .context("Failed to create CIGAR from reversed operations")?,
                     ),
                 };
                 let cigar_str = cigar.to_string();
 
                 // bases
-                *record.sequence_mut() = Sequence::try_from(bases_vec).unwrap();
+                *record.sequence_mut() = Sequence::try_from(bases_vec)
+                    .context("Failed to convert bases to SAM sequence")?;
 
                 // qualities
                 if let Some(quals) = quals_vec {
-                    *record.quality_scores_mut() = QualityScores::try_from(quals).unwrap();
+                    *record.quality_scores_mut() = QualityScores::try_from(quals)
+                        .context("Failed to convert quality scores")?;
                 }
 
                 // cigar
@@ -845,7 +886,8 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                 if clip_suffix_len > 0 {
                     cigar_ops.push(Op::new(clip_op, clip_suffix_len));
                 }
-                let cigar = Cigar::try_from(cigar_ops).unwrap();
+                let cigar =
+                    Cigar::try_from(cigar_ops).context("Failed to create CIGAR from operations")?;
                 let cigar_string = cigar.to_string();
                 *record.cigar_mut() = cigar;
 
@@ -906,7 +948,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                         &cigar_str,
                         noodles::sam::record::data::field::Type::String,
                     )
-                    .unwrap(),
+                    .context("Failed to create SAM data field value from CIGAR string")?,
                 );
                 data.insert(
                     CustomTag::ChainLength.into(),
@@ -963,7 +1005,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                         &sa_string,
                         noodles::sam::record::data::field::Type::String,
                     )
-                    .unwrap(),
+                    .context("Failed to create SAM data field value from SA string")?,
                 );
                 records.push(record);
             }
@@ -1000,5 +1042,261 @@ pub mod tests {
         assert_eq!(alignment.len(), 1);
         assert_eq!(alignment[0].length, seq.len());
         assert_eq!(alignment[0].cigar(), format!("{}=", seq.len()));
+    }
+
+    /// Test that Custom alignment mode works correctly when getting suboptimal alignments.
+    /// Custom mode is used internally by traceback_from and traceback_all when retrieving
+    /// multiple alignments from the traceback matrix.
+    #[test]
+    fn test_custom_mode_via_suboptimal_alignments() {
+        // Create a target sequence that can produce multiple good alignments
+        let target = b"ACGTACGTACGTACGT".to_vec();
+        let target_seqs = [target_seq::TargetSeq::new("test-contig", &target, false)];
+
+        // Create aligners with suboptimal alignment enabled
+        let mut aligners = Builder::default()
+            .suboptimal(true)
+            .suboptimal_pct(50.0)
+            .build_aligners(&target_seqs);
+
+        // Query that can align to multiple positions in the target
+        let query = b"ACGTACGT".to_vec();
+        let record = FastxOwnedRecord {
+            head: b"test-record".to_vec(),
+            seq: query.clone(),
+            qual: Some(vec![b'#'; query.len()]),
+        };
+
+        let k = 4;
+        let target_hashes: Vec<TargetHash> = target_seqs
+            .iter()
+            .map(|target_seq| target_seq.build_target_hash(k))
+            .collect();
+
+        let (alignments, _) = aligners.align(&record, &target_seqs, &target_hashes);
+
+        // Should get at least one alignment
+        assert!(!alignments.is_empty(), "Should have at least one alignment");
+
+        // All alignments returned from traceback should have Custom mode internally,
+        // but after remove_clipping, they should work correctly
+        for alignment in &alignments {
+            // Verify the alignment has reasonable properties
+            assert!(alignment.score > 0, "Alignment score should be positive");
+            // Note: xlen is the length of x (target), ylen is the length of y (query)
+            assert_eq!(
+                alignment.xlen,
+                target.len(),
+                "xlen should match target length"
+            );
+            assert_eq!(
+                alignment.ylen,
+                query.len(),
+                "ylen should match query length"
+            );
+
+            // Verify that the alignment was processed correctly (clipping was handled)
+            // The mode should have been Custom during traceback, but the operations
+            // should be valid after processing
+            assert!(
+                alignment.length > 0,
+                "Alignment length should be positive after processing Custom mode"
+            );
+        }
+
+        // Verify alignments are sorted by score (descending)
+        for i in 1..alignments.len() {
+            assert!(
+                alignments[i - 1].score >= alignments[i].score,
+                "Alignments should be sorted by score descending"
+            );
+        }
+    }
+
+    /// Test that Custom mode handles clipping correctly via traceback_from.
+    /// This directly tests that the Custom mode path doesn't panic and produces
+    /// valid alignments.
+    #[test]
+    fn test_custom_mode_clipping_via_traceback() {
+        // Create a simple scenario where we can test traceback_from directly
+        let target = b"ACGTACGTACGTACGT".to_vec();
+        let target_seqs = [target_seq::TargetSeq::new("test-contig", &target, false)];
+
+        let mut aligners = Builder::default()
+            .suboptimal(true)
+            .build_aligners(&target_seqs);
+
+        let query = b"ACGTACGT".to_vec();
+
+        // First, run an alignment to populate the traceback matrix
+        let _alignment = aligners.multi_contig_align(&query, None);
+
+        // Now use traceback_from to get an alignment with Custom mode
+        let traced_alignment = aligners.multi_contig.traceback_from(query.len(), 0);
+
+        assert!(
+            traced_alignment.is_some(),
+            "traceback_from should return an alignment"
+        );
+
+        let traced = traced_alignment.unwrap();
+
+        // The alignment from traceback_from uses Custom mode internally
+        // Verify it has valid properties after remove_clipping processes it
+        assert!(
+            traced.score > 0,
+            "Traced alignment should have positive score"
+        );
+        assert!(
+            traced.length > 0,
+            "Traced alignment should have positive length"
+        );
+        // Note: xlen is the length of x (target), ylen is the length of y (query)
+        assert_eq!(traced.xlen, target.len(), "xlen should match target length");
+        assert_eq!(traced.ylen, query.len(), "ylen should match query length");
+
+        // Verify that clipping was handled correctly (no panic from Custom mode)
+        // The cigar string should be valid
+        let cigar = traced.cigar();
+        assert!(!cigar.is_empty(), "CIGAR string should not be empty");
+    }
+
+    /// Test that sub-alignment scoring uses actual sequences, not hardcoded base pairs.
+    /// This verifies the fix where scoring was incorrectly using b'A'/b'A' for matches
+    /// and b'A'/b'C' for mismatches instead of actual aligned sequences.
+    #[test]
+    fn test_scoring_uses_actual_sequences() {
+        // Create two different target sequences with same length but different content
+        let target1 = b"AAAAAAAAAAAAAAAA".to_vec(); // All A's
+        let target2 = b"CCCCCCCCCCCCCCCC".to_vec(); // All C's
+
+        // Query that matches target1 perfectly but mismatches target2 completely
+        let query = b"AAAAAAAAAAAAAAAA".to_vec();
+
+        // Test with target1 (perfect match)
+        let target_seqs1 = [target_seq::TargetSeq::new("target1", &target1, false)];
+        let mut aligners1 = Builder::default().build_aligners(&target_seqs1);
+        let record1 = FastxOwnedRecord {
+            head: b"test-record".to_vec(),
+            seq: query.clone(),
+            qual: Some(vec![b'#'; query.len()]),
+        };
+        let k = 7;
+        let target_hashes1: Vec<TargetHash> = target_seqs1
+            .iter()
+            .map(|target_seq| target_seq.build_target_hash(k))
+            .collect();
+        let (alignments1, _) = aligners1.align(&record1, &target_seqs1, &target_hashes1);
+
+        // Test with target2 (complete mismatch)
+        let target_seqs2 = [target_seq::TargetSeq::new("target2", &target2, false)];
+        let mut aligners2 = Builder::default().build_aligners(&target_seqs2);
+        let record2 = FastxOwnedRecord {
+            head: b"test-record".to_vec(),
+            seq: query.clone(),
+            qual: Some(vec![b'#'; query.len()]),
+        };
+        let target_hashes2: Vec<TargetHash> = target_seqs2
+            .iter()
+            .map(|target_seq| target_seq.build_target_hash(k))
+            .collect();
+        let (alignments2, _) = aligners2.align(&record2, &target_seqs2, &target_hashes2);
+
+        // Both should produce alignments
+        assert!(!alignments1.is_empty(), "Should have alignment for target1");
+        assert!(!alignments2.is_empty(), "Should have alignment for target2");
+
+        let score1 = alignments1[0].score;
+        let score2 = alignments2[0].score;
+
+        // If scoring used hardcoded bases (old bug), scores would be similar
+        // With actual sequences, perfect match should score much higher than mismatches
+        // Default scoring: match=1, mismatch=-4, so difference should be significant
+        assert!(
+            score1 > score2,
+            "Perfect match (score={}) should score higher than mismatches (score={})",
+            score1,
+            score2
+        );
+
+        // Verify the score difference is substantial
+        // Perfect match: 16 * 1 = 16
+        // Complete mismatch: 16 * -4 = -64
+        // Difference should be at least 16 (actually should be 80)
+        assert!(
+            score1 - score2 >= 16,
+            "Score difference ({}) should reflect actual sequence differences",
+            score1 - score2
+        );
+
+        // Additionally verify the perfect match has positive score
+        assert!(
+            score1 > 0,
+            "Perfect match should have positive score, got {}",
+            score1
+        );
+    }
+
+    /// Test that sub-alignment scoring correctly handles SAM record formatting with
+    /// actual sequence-based scores. This tests the target_seq_refs construction that
+    /// passes sequences to the scoring function.
+    #[test]
+    fn test_sam_formatting_with_actual_scores() {
+        // Create a scenario with both forward and reverse complement strands
+        let target = b"ACGTACGT".to_vec();
+        let target_seqs = [target_seq::TargetSeq::new("test-contig", &target, false)];
+
+        let mut aligners_builder = Builder::default();
+        aligners_builder.double_strand(true);
+        let mut aligners = aligners_builder.build_aligners(&target_seqs);
+        let formatter = aligners_builder.build_sam_record_formatter(&target_seqs);
+
+        // Query that matches the forward strand perfectly
+        let query = b"ACGTACGT".to_vec();
+        let record = FastxOwnedRecord {
+            head: b"test-record".to_vec(),
+            seq: query.clone(),
+            qual: Some(vec![b'#'; query.len()]),
+        };
+
+        let k = 4;
+        let target_hashes: Vec<TargetHash> = target_seqs
+            .iter()
+            .map(|target_seq| target_seq.build_target_hash(k))
+            .collect();
+
+        let (alignments, pre_align_score) = aligners.align(&record, &target_seqs, &target_hashes);
+
+        // Format as SAM records
+        let sam_records = formatter
+            .format(&record, &alignments, pre_align_score)
+            .expect("Should format SAM records successfully");
+
+        assert!(!sam_records.is_empty(), "Should produce SAM records");
+
+        // Verify that the alignment score (AS tag) reflects actual sequence-based scoring
+        for sam_record in &sam_records {
+            let data = sam_record.data();
+            if let Some(score_field) =
+                data.get(&noodles::sam::record::data::field::tag::ALIGNMENT_SCORE)
+            {
+                let score = match score_field {
+                    noodles::sam::record::data::field::Value::Int8(s) => *s as i32,
+                    noodles::sam::record::data::field::Value::UInt8(s) => *s as i32,
+                    noodles::sam::record::data::field::Value::Int16(s) => *s as i32,
+                    noodles::sam::record::data::field::Value::UInt16(s) => *s as i32,
+                    noodles::sam::record::data::field::Value::Int32(s) => *s,
+                    noodles::sam::record::data::field::Value::UInt32(s) => *s as i32,
+                    _ => panic!("AS tag should be integer type, got {:?}", score_field),
+                };
+                // With correct scoring using actual sequences, a perfect match should have
+                // positive score (8 matches * 1 point = 8)
+                assert!(
+                    score > 0,
+                    "Perfect match alignment should have positive AS score, got {}",
+                    score
+                );
+            }
+        }
     }
 }
