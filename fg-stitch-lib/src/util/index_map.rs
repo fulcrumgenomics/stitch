@@ -38,7 +38,7 @@ impl<T: Clone> IndexMap<T> {
     }
 
     pub fn contains(&self, index: usize) -> bool {
-        index < self.data.len() && self.data[index].is_some()
+        self.get(index).is_some()
     }
 
     #[inline(always)]

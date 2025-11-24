@@ -128,23 +128,13 @@ impl<I: Iterator<Item = FastxOwnedRecord>> Iterator for FastxGroupingIterator<I>
 
     #[inline]
     fn next(&mut self) -> Option<Vec<FastxOwnedRecord>> {
-        match self.0.next() {
-            None => None,
-            Some(record) => {
-                let mut items: Vec<FastxOwnedRecord> = vec![record];
-                while let Some(record) = self.0.peek() {
-                    if record.seq == items[0].seq {
-                        // We know there's a record because peek() returned Some
-                        if let Some(next_record) = self.0.next() {
-                            items.push(next_record);
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                Some(items)
+        self.0.next().map(|record| {
+            let mut items: Vec<FastxOwnedRecord> = vec![record];
+            while let Some(next_record) = self.0.next_if(|r| r.seq == items[0].seq) {
+                items.push(next_record);
             }
-        }
+            items
+        })
     }
 }
 
