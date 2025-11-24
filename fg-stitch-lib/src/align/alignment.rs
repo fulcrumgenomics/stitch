@@ -5,6 +5,7 @@ use crate::align::aligners::constants::{
     AlignmentMode::{Global, QueryLocal, TargetLocal},
     AlignmentOperation::{Del, Ins, Match, Subst, Xclip, Xjump, Yclip, Yjump},
 };
+use serde::{Deserialize, Serialize};
 
 /// We consider alignment between two sequences x and  y. x is the query or read sequence
 /// and y is the reference or template sequence. An alignment, consisting of a score,
@@ -12,7 +13,7 @@ use crate::align::aligners::constants::{
 /// lengths of sequences x and y, and the alignment edit operations. The start position
 /// and end position of the alignment does not include the clipped regions. The length
 /// of clipped regions are already encapsulated in the Alignment Operation.
-#[derive(Debug, Eq, PartialEq, Clone, Default)]
+#[derive(Debug, Eq, PartialEq, Clone, Default, Serialize, Deserialize)]
 pub struct Alignment {
     // FIXME: rename to Alignment
     /// Smith-Waterman alignment score
@@ -352,7 +353,7 @@ impl Alignment {
             aln.xend = aln.xlen;
         }
         if y_clip && aln.yend < aln.ylen {
-            aln.operations.push(Xclip(aln.ylen - aln.yend));
+            aln.operations.push(Yclip(aln.ylen - aln.yend));
             aln.yend = aln.ylen;
         }
 
