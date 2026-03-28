@@ -299,7 +299,7 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
                 let opp_contig = to_opposite_strand
                     .get_u32(contig.aligner.contig_idx)
                     // TODO: does not work when subsetting the contigs
-                    .map(|idx| &self.contigs[idx]);
+                    .map(|idx| &self.contigs[*idx]);
 
                 // Evaluate three jumps
                 // 1. jump to the same contig and strand
@@ -332,7 +332,7 @@ impl<'a, F: MatchFunc> MultiContigAligner<'a, F> {
 
             // Fill in the column
             for contig in &mut self.contigs {
-                let jump_info = best_jump_infos.get_u32(contig.aligner.contig_idx).unwrap();
+                let jump_info = *best_jump_infos.get_u32(contig.aligner.contig_idx).unwrap();
                 contig.aligner.fill_column(
                     contig.seq,
                     y,
