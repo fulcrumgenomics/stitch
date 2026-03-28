@@ -241,7 +241,7 @@ pub fn traceback_from<F: MatchFunc>(
     if !contig_idx_to_aligner_idx.contains_u32(contig_index) {
         return None;
     }
-    let mut cur_aligner = aligners[contig_idx_to_aligner_idx.get_u32(contig_index).unwrap()];
+    let mut cur_aligner = aligners[*contig_idx_to_aligner_idx.get_u32(contig_index).unwrap()];
     let score = cur_aligner.S[n % 2][cur_aligner.traceback.rows - 1];
     let alignment_length = cur_aligner
         .traceback
@@ -257,7 +257,7 @@ pub fn traceback_from<F: MatchFunc>(
     loop {
         cur_aligner = match contig_idx_to_aligner_idx.get_u32(cur_contig_idx) {
             None => return None,
-            Some(idx) => aligners[idx],
+            Some(idx) => aligners[*idx],
         };
         let next_layer: u16;
         match last_layer {
@@ -285,7 +285,7 @@ pub fn traceback_from<F: MatchFunc>(
                     cur_contig_idx = s_value.idx;
                     cur_aligner = match contig_idx_to_aligner_idx.get_u32(cur_contig_idx) {
                         None => return None,
-                        Some(idx) => aligners[idx],
+                        Some(idx) => aligners[*idx],
                     };
                 }
                 i = s_from;
@@ -334,7 +334,7 @@ pub fn traceback_from<F: MatchFunc>(
                 cur_contig_idx = s_value.idx;
                 cur_aligner = match contig_idx_to_aligner_idx.get_u32(cur_contig_idx) {
                     None => return None,
-                    Some(idx) => aligners[idx],
+                    Some(idx) => aligners[*idx],
                 };
                 i = s_value.from as usize;
                 next_layer = cur_aligner.traceback.get(i, j).get_s().tb;
