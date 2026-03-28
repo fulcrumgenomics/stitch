@@ -337,7 +337,7 @@ pub fn traceback_from<F: MatchFunc>(
                 i = s_value.from as usize;
                 next_layer = cur_aligner.traceback.get(i, j).get_s().tb;
             }
-            _ => panic!("Dint expect this!"),
+            _ => return None, // unexpected traceback state; treat as alignment failure
         }
         last_layer = next_layer;
     }

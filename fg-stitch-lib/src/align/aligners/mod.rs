@@ -126,7 +126,7 @@ impl Options {
             AlignmentMode::QueryLocal => (MIN_SCORE, MIN_SCORE, 0, 0),
             AlignmentMode::TargetLocal => (0, 0, MIN_SCORE, MIN_SCORE),
             AlignmentMode::Global => (MIN_SCORE, MIN_SCORE, MIN_SCORE, MIN_SCORE),
-            AlignmentMode::Custom => panic!("Custom alignment mode not supported"), // TODO: move to main run method
+            AlignmentMode::Custom => (0, 0, 0, 0), // traceback determines clipping
         }
     }
 
@@ -347,7 +347,7 @@ impl Aligners<'_, MatchParams> {
                     .retain(|x| matches!(*x, Match | Subst | Ins | Del | Xjump(_, _)));
             }
             AlignmentMode::Global => (), // do nothing, there can be no clipping!
-            AlignmentMode::Custom => unreachable!(),
+            AlignmentMode::Custom => (), // operations already set by traceback
         }
         aln
     }

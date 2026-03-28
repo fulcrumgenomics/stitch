@@ -103,6 +103,7 @@ pub enum AlignmentMode {
     TargetLocal,
     /// Aligns the full read versus the full reference.
     Global,
+    /// Internal mode set by traceback; not user-facing. Clipping is handled by the traceback.
     Custom,
 }
 
