@@ -1,3 +1,6 @@
+// When low_mem feature is NOT enabled, this module is not used
+#![cfg_attr(not(feature = "low_mem"), allow(dead_code))]
+
 use crate::align::traceback::TB_MAX;
 
 use super::{SValue, TracebackCell};
@@ -15,7 +18,8 @@ use serde::{Deserialize, Serialize};
 /// - bits 4-7 are for deletion traceback (D_POS)
 /// - bits 8-11 are for S matrix traceback (S_POS)
 /// - bit 12-15 are for the upper 4-bits of the jump contig index (i.e. which contig did we jump from)
-///   The `aux` field is packed as follows:
+///
+/// The `aux` field is packed as follows:
 /// - bits 0-3 are for the lower 4-bits of the jump contig index (i.e. which contig did we jump from)
 /// - bits 4-31 are for the "from" jump index in the contig (i.e. where in the given contig did we jump from)
 #[derive(

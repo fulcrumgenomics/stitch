@@ -74,7 +74,7 @@ impl Iterator for FastaToFastxIterator {
     fn next(&mut self) -> Option<Self::Item> {
         self.0
             .next()
-            .map(|record| record.expect("Error reading fasta record"))
+            .map(|record| record.expect("Error reading FASTA record"))
             .map(|record| FastxOwnedRecord::from_fasta(&record))
     }
 }
@@ -87,7 +87,7 @@ impl Iterator for FastqToFastxIterator {
     fn next(&mut self) -> Option<Self::Item> {
         self.0
             .next()
-            .map(|record| record.expect("Error reading fasta record"))
+            .map(|record| record.expect("Error reading FASTQ record"))
             .map(|record| FastxOwnedRecord::from_fastq(&record))
     }
 }
@@ -128,20 +128,13 @@ impl<I: Iterator<Item = FastxOwnedRecord>> Iterator for FastxGroupingIterator<I>
 
     #[inline]
     fn next(&mut self) -> Option<Vec<FastxOwnedRecord>> {
-        match self.0.next() {
-            None => None,
-            Some(record) => {
-                let mut items: Vec<FastxOwnedRecord> = vec![record];
-                while let Some(record) = self.0.peek() {
-                    if record.seq == items[0].seq {
-                        items.push(self.0.next().expect("Expected record"));
-                    } else {
-                        break;
-                    }
-                }
-                Some(items)
+        self.0.next().map(|record| {
+            let mut items: Vec<FastxOwnedRecord> = vec![record];
+            while let Some(next_record) = self.0.next_if(|r| r.seq == items[0].seq) {
+                items.push(next_record);
             }
-        }
+            items
+        })
     }
 }
 
@@ -162,16 +155,19 @@ impl FastxThreadReader {
         records: Vec<FastxOwnedRecord>,
         to_align_tx: &Sender<InputMessage>,
         to_output_tx: &Sender<Receiver<OutputMessage>>,
-    ) {
+    ) -> Result<()> {
         let (records_tx, records_rx) = flume::unbounded(); // oneshot channel
         let input_msg = InputMessage {
             records,
             oneshot: records_tx,
         };
-        to_align_tx.send(input_msg).expect("Error sending message");
+        to_align_tx
+            .send(input_msg)
+            .context("Error sending message to alignment channel")?;
         to_output_tx
             .send(records_rx)
-            .expect("Error sending receiver");
+            .context("Error sending receiver to output channel")?;
+        Ok(())
     }
 
     /// Creates a new `FastqThreadReader` in a new thread.
@@ -193,8 +189,7 @@ impl FastxThreadReader {
                 Box::new(std::io::stdin()) as Box<dyn Read>
             } else {
                 let handle = File::open(&file)
-                    .with_context(|| format!("Error opening input: {}", file.display()))
-                    .unwrap();
+                    .with_context(|| format!("Error opening input: {}", file.display()))?;
                 Box::new(handle) as Box<dyn Read>
             };
             // Wrap it in a buffer
@@ -227,12 +222,12 @@ impl FastxThreadReader {
             for chunk in fastq_grouping_iter {
                 records.extend(chunk);
                 if records.len() >= RECORDS_PER_CHUNK_PER_THREAD {
-                    Self::write_records_to_txs(records, &to_align_tx, &to_output_tx);
+                    Self::write_records_to_txs(records, &to_align_tx, &to_output_tx)?;
                     records = Vec::with_capacity(RECORDS_PER_CHUNK_PER_THREAD);
                 }
             }
             if !records.is_empty() {
-                Self::write_records_to_txs(records, &to_align_tx, &to_output_tx);
+                Self::write_records_to_txs(records, &to_align_tx, &to_output_tx)?;
             }
 
             Ok(())

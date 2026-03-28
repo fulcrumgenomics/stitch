@@ -257,20 +257,18 @@ impl Aligners<'_, MatchParams> {
                     self.opts.pre_align_min_score,
                 );
                 if let Some(score) = score_fwd {
-                    contig_idx_to_prealign_score.put(
-                        self.multi_contig
-                            .contig_index_for_strand(true, &target_seq.name)
-                            .unwrap(),
-                        score,
-                    );
+                    let idx = self
+                        .multi_contig
+                        .contig_index_for_strand(true, &target_seq.name)
+                        .expect("BUG: forward strand contig should exist in multi_contig aligner");
+                    contig_idx_to_prealign_score.put(idx, score);
                 }
                 if let Some(score) = score_revcomp {
-                    contig_idx_to_prealign_score.put(
-                        self.multi_contig
-                            .contig_index_for_strand(false, &target_seq.name)
-                            .unwrap(),
-                        score,
-                    );
+                    let idx = self
+                        .multi_contig
+                        .contig_index_for_strand(false, &target_seq.name)
+                        .expect("BUG: reverse strand contig should exist when double_strand=true");
+                    contig_idx_to_prealign_score.put(idx, score);
                 }
                 // If we are going to align to all the contigs anyhow, then we can stop here.
                 if !self.opts.pre_align_subset_contigs && !contig_idx_to_prealign_score.is_empty() {
@@ -641,11 +639,13 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
             *record.flags_mut() = Flags::UNMAPPED;
 
             // bases
-            *record.sequence_mut() = Sequence::try_from(bases.to_owned()).unwrap();
+            *record.sequence_mut() = Sequence::try_from(bases.to_owned())
+                .context("Failed to convert bases to SAM sequence")?;
 
             // qualities
             if let Some(quals) = quals {
-                *record.quality_scores_mut() = QualityScores::try_from(quals.to_owned()).unwrap();
+                *record.quality_scores_mut() = QualityScores::try_from(quals.to_owned())
+                    .context("Failed to convert quality scores")?;
             }
 
             // cigar
@@ -657,7 +657,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
             if let Some(score) = pre_alignment_score {
                 let mut data = Data::default();
                 data.insert(
-                    "xs".parse().unwrap(),
+                    "xs".parse().context("Failed to parse 'xs' tag")?,
                     noodles::sam::record::data::field::Value::from(score),
                 );
                 *record.data_mut() = data;
@@ -797,7 +797,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                             .as_ref()
                             .map(|quals| quals[sub.query_start..sub.query_end].to_vec()),
                         Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
-                            .unwrap(),
+                            .context("Failed to create CIGAR from reversed operations")?,
                     ),
                     (false, false) => (
                         reverse_complement(bases),
@@ -805,7 +805,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                             .as_ref()
                             .map(|quals| quals.iter().copied().rev().collect()),
                         Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
-                            .unwrap(),
+                            .context("Failed to create CIGAR from reversed operations")?,
                     ),
                     (false, true) => (
                         reverse_complement(bases[sub.query_start..sub.query_end].to_vec()),
@@ -817,17 +817,19 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                                 .collect()
                         }),
                         Cigar::try_from(sub.cigar.iter().rev().copied().collect::<Vec<Op>>())
-                            .unwrap(),
+                            .context("Failed to create CIGAR from reversed operations")?,
                     ),
                 };
                 let cigar_str = cigar.to_string();
 
                 // bases
-                *record.sequence_mut() = Sequence::try_from(bases_vec).unwrap();
+                *record.sequence_mut() = Sequence::try_from(bases_vec)
+                    .context("Failed to convert bases to SAM sequence")?;
 
                 // qualities
                 if let Some(quals) = quals_vec {
-                    *record.quality_scores_mut() = QualityScores::try_from(quals).unwrap();
+                    *record.quality_scores_mut() = QualityScores::try_from(quals)
+                        .context("Failed to convert quality scores")?;
                 }
 
                 // cigar
@@ -857,7 +859,8 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                 if clip_suffix_len > 0 {
                     cigar_ops.push(Op::new(clip_op, clip_suffix_len));
                 }
-                let cigar = Cigar::try_from(cigar_ops).unwrap();
+                let cigar =
+                    Cigar::try_from(cigar_ops).context("Failed to create CIGAR from operations")?;
                 let cigar_string = cigar.to_string();
                 *record.cigar_mut() = cigar;
 
@@ -918,7 +921,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                         &cigar_str,
                         noodles::sam::record::data::field::Type::String,
                     )
-                    .unwrap(),
+                    .context("Failed to create SAM data field value from CIGAR string")?,
                 );
                 data.insert(
                     CustomTag::ChainLength.into(),
@@ -975,7 +978,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
                         &sa_string,
                         noodles::sam::record::data::field::Type::String,
                     )
-                    .unwrap(),
+                    .context("Failed to create SAM data field value from SA string")?,
                 );
                 records.push(record);
             }
