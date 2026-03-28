@@ -352,7 +352,7 @@ impl Alignment {
             aln.xend = aln.xlen;
         }
         if y_clip && aln.yend < aln.ylen {
-            aln.operations.push(Xclip(aln.ylen - aln.yend));
+            aln.operations.push(Yclip(aln.ylen - aln.yend));
             aln.yend = aln.ylen;
         }
 

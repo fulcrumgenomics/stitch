@@ -684,6 +684,18 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
             }
         };
 
+        // Build target sequence refs (forward + reverse complement if double_strand)
+        let num_seqs = self.target_seqs.len() * if self.opts.double_strand { 2 } else { 1 };
+        let mut target_seq_refs: Vec<&[u8]> = Vec::with_capacity(num_seqs);
+        for target_seq in self.target_seqs {
+            target_seq_refs.push(&target_seq.fwd);
+        }
+        if self.opts.double_strand {
+            for target_seq in self.target_seqs {
+                target_seq_refs.push(&target_seq.revcomp);
+            }
+        }
+
         // Examine each alignment (chain of sub-alignments).  This assumes chains are sorted
         // descending by score
         for (chain_idx, chain) in chains.iter().enumerate() {
@@ -691,7 +703,7 @@ impl<F: MatchFunc> SamRecordFormatter<'_, F> {
 
             // Get the sub-alignments for this chain
             let mut builder: SubAlignmentBuilder = SubAlignmentBuilder::new(self.opts.use_eq_and_x);
-            let mut subs = builder.build(chain, true, &self.scoring);
+            let mut subs = builder.build(chain, true, &self.scoring, bases, &target_seq_refs);
             ensure!(!subs.is_empty());
 
             // Pick the sub-alignment that **will not** have the supplementary flag set.  There
