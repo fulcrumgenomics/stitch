@@ -1,6 +1,3 @@
-// When low_mem feature is enabled, this module is not used
-#![cfg_attr(feature = "low_mem", allow(dead_code))]
-
 use serde::{Deserialize, Serialize};
 
 use crate::align::traceback::TB_MAX;

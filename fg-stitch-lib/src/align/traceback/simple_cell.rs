@@ -1,6 +1,3 @@
-// When low_mem feature is NOT enabled, this module is not used
-#![cfg_attr(not(feature = "low_mem"), allow(dead_code))]
-
 use crate::align::traceback::TB_MAX;
 
 use super::{SValue, TracebackCell};
