@@ -44,26 +44,33 @@ impl SubAlignmentBuilder {
         }
     }
 
-    // TODO: score based on the _actual_ target and query sequences.
     fn add_op<F: MatchFunc>(
         &mut self,
         op: AlignmentOperation,
         op_len: usize,
         scoring: &Scoring<F>,
+        query_seq: &[u8],
+        target_seqs: &[&[u8]],
     ) -> Option<SubAlignment> {
         match op {
-            AlignmentOperation::Match => {
-                self.score += scoring.match_fn.score(b'A', b'A') * (op_len as i32);
+            AlignmentOperation::Match | AlignmentOperation::Subst => {
+                let query_slice = &query_seq[self.query_offset..self.query_offset + op_len];
+                let target_slice =
+                    &target_seqs[self.contig_idx][self.target_offset..self.target_offset + op_len];
+                let op_score: i32 = query_slice
+                    .iter()
+                    .zip(target_slice)
+                    .map(|(&q, &t)| scoring.match_fn.score(q, t))
+                    .sum();
+                self.score += op_score;
                 self.query_offset += op_len;
                 self.target_offset += op_len;
-                self.elements.push(Op::new(self.match_kind, op_len));
-                None
-            }
-            AlignmentOperation::Subst => {
-                self.score += scoring.match_fn.score(b'A', b'C') * (op_len as i32);
-                self.query_offset += op_len;
-                self.target_offset += op_len;
-                self.elements.push(Op::new(self.mismatch_kind, op_len));
+                let kind = if op == AlignmentOperation::Match {
+                    self.match_kind
+                } else {
+                    self.mismatch_kind
+                };
+                self.elements.push(Op::new(kind, op_len));
                 None
             }
             AlignmentOperation::Del => {
@@ -171,6 +178,8 @@ impl SubAlignmentBuilder {
         chain: &Alignment,
         swap: bool,
         scoring: &Scoring<F>,
+        query_seq: &[u8],
+        target_seqs: &[&[u8]],
     ) -> Vec<SubAlignment> {
         self.elements.clear();
         self.query_start = chain.xstart;
@@ -195,7 +204,8 @@ impl SubAlignmentBuilder {
             if self.cmp_op(last, op) {
                 op_len += 1;
             } else {
-                if let Some(alignment) = self.add_op(last, op_len, scoring) {
+                if let Some(alignment) = self.add_op(last, op_len, scoring, query_seq, target_seqs)
+                {
                     // ignore alignments that do not consume target bases
                     if alignment.target_start < alignment.target_end {
                         alignments.push(alignment);
@@ -205,7 +215,7 @@ impl SubAlignmentBuilder {
             }
             last = op;
         }
-        if let Some(alignment) = self.add_op(last, op_len, scoring) {
+        if let Some(alignment) = self.add_op(last, op_len, scoring, query_seq, target_seqs) {
             alignments.push(alignment);
         } else {
             let alignment = SubAlignment {
