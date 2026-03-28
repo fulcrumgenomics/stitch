@@ -1,0 +1,53 @@
+#!/bin/bash
+#
+# Pre-commit hook for stitch
+#
+# Runs cargo fmt check and clippy before each commit.
+# Tests are skipped by default (too slow) but can be enabled with:
+#   STITCH_PRECOMMIT_TEST=1 git commit
+#
+# To bypass the hook entirely (use sparingly):
+#   git commit --no-verify
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check if we're in the right directory
+if [[ ! -f "Cargo.toml" ]]; then
+    echo "Error: Not in stitch root directory"
+    exit 1
+fi
+
+# Run formatting check
+echo "==> cargo fmt --all -- --check"
+if ! cargo fmt --all -- --check; then
+    echo ""
+    echo "Formatting check failed!"
+    echo "Run 'cargo fmt --all' to fix formatting issues."
+    exit 1
+fi
+
+# Run linting check
+echo "==> cargo clippy --all-features --locked -- -D warnings"
+if ! cargo clippy --all-features --locked -- -D warnings; then
+    echo ""
+    echo "Lint check failed!"
+    echo "Fix the clippy warnings above before committing."
+    exit 1
+fi
+
+# Optionally run tests
+if [[ "${STITCH_PRECOMMIT_TEST:-0}" == "1" ]]; then
+    echo "==> cargo test --locked --quiet"
+    if ! cargo test --locked --quiet; then
+        echo ""
+        echo "Tests failed!"
+        exit 1
+    fi
+else
+    echo "==> Skipping tests (set STITCH_PRECOMMIT_TEST=1 to enable)"
+fi
+
+echo ""
+echo "Pre-commit checks passed!"
