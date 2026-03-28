@@ -47,7 +47,7 @@ impl TargetSeq {
     }
 
     /// Creates a new `TargetHash` with the given k-mer size.
-    pub fn build_target_hash(&self, k: usize) -> TargetHash {
+    pub fn build_target_hash(&self, k: usize) -> TargetHash<'_> {
         TargetHash {
             name: self.name.clone(),
             fwd_hash: hash_kmers(&self.fwd, k),
